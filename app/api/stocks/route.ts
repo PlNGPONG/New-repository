@@ -1,8 +1,19 @@
 // app/api/stocks/route.ts
 import { NextResponse } from 'next/server';
 
+// TypeScriptの厳しいチェックを通過させるための型定義（設計図）を追加
+type StockData = {
+  ticker: string;
+  name: string;
+  price: number | null;
+  change: number | null;
+  changePercent: number | null;
+  note?: string;
+};
+
 export async function GET() {
-  const fallbackData = [
+  // ここにも型（StockData[]）を指定
+  const fallbackData: StockData[] = [
     { ticker: '8035', name: '東京エレクトロン', price: 42150, change: 450, changePercent: 1.08 },
     { ticker: '6857', name: 'アドバンテスト', price: 7840, change: 125, changePercent: 1.62 },
     { ticker: 'KIOXIA', name: 'キオクシアHD', price: null, change: null, changePercent: null, note: 'IPO準備中' },
@@ -12,7 +23,8 @@ export async function GET() {
 
   try {
     const symbols = ['8035.T', '8306.T']; 
-    const liveDataList = [];
+    // エラーの原因だった部分。ここにも型（StockData[]）を明記します
+    const liveDataList: StockData[] = [];
 
     for (const symbol of symbols) {
       // パッケージを使わず、Yahooファイナンスの公開APIを直接叩く
