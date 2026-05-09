@@ -2,9 +2,6 @@
 import { NextResponse } from 'next/server';
 
 export async function GET() {
-  const apiKey = process.env.STOCK_API_KEY;
-
-  // 万が一APIが制限された場合の安全用データ
   const fallbackData = [
     { ticker: '8035', name: '東京エレクトロン', price: 42150, change: 450, changePercent: 1.08 },
     { ticker: '6857', name: 'アドバンテスト', price: 7840, change: 125, changePercent: 1.62 },
@@ -13,38 +10,42 @@ export async function GET() {
     { ticker: '8306', name: '三菱UFJ', price: 1825.5, change: 12.0, changePercent: 0.66 }
   ];
 
-  if (!apiKey) {
-    console.log("APIキーが未設定のため、フォールバックデータを返します。");
-    return NextResponse.json({ success: true, data: fallbackData });
-  }
-
   try {
-    // 実際にAlpha Vantageからデータを取得する銘柄（無料枠を考慮し、代表的な2銘柄のみリアルタイム取得）
-    // ※Alpha Vantageは日本の銘柄コードの後に .TOK をつけます。
-    const symbols = ['8035.TOK', '8306.TOK']; 
+    const symbols = ['8035.T', '8306.T']; 
     const liveDataList = [];
 
     for (const symbol of symbols) {
-      const response = await fetch(`https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${symbol}&apikey=${apiKey}`);
-      const data = await response.json();
+      // パッケージを使わず、Yahooファイナンスの公開APIを直接叩く
+      const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=1d`, {
+        cache: 'no-store' // 常に最新のデータを取得する設定
+      });
       
-      // API制限（1日25回等）に引っかかった場合は、エラーを出さずにフォールバックへ逃がす
-      if (data.Information || !data['Global Quote'] || Object.keys(data['Global Quote']).length === 0) {
-        console.warn(`${symbol} のデータ取得で制限またはエラー発生。`);
+      if (!res.ok) {
+        console.warn(`${symbol} のデータ取得に失敗しました`);
+        continue;
+      }
+      
+      const data = await res.json();
+      if (!data.chart || !data.chart.result || !data.chart.result[0]) {
         continue;
       }
 
-      const quote = data['Global Quote'];
+      // 取得したJSONデータから株価を抽出
+      const meta = data.chart.result[0].meta;
+      const price = meta.regularMarketPrice;
+      const prevClose = meta.chartPreviousClose;
+      const change = price - prevClose;
+      const changePercent = (change / prevClose) * 100;
+      
       liveDataList.push({
-        ticker: symbol.replace('.TOK', ''),
-        name: symbol === '8035.TOK' ? '東京エレクトロン(Live)' : '三菱UFJ(Live)',
-        price: parseFloat(quote['05. price']),
-        change: parseFloat(quote['09. change']),
-        changePercent: parseFloat(quote['10. change percent'].replace('%', '')),
+        ticker: symbol.replace('.T', ''),
+        name: symbol === '8035.T' ? '東京エレクトロン(Live)' : '三菱UFJ(Live)',
+        price: Math.round(price * 10) / 10,
+        change: Math.round(change * 10) / 10,
+        changePercent: Math.round(changePercent * 100) / 100,
       });
     }
 
-    // リアルタイム取得に成功した銘柄があれば、フォールバックデータを上書きする
     const finalData = fallbackData.map(fallback => {
       const live = liveDataList.find(l => l.ticker === fallback.ticker);
       return live ? live : fallback;
@@ -54,7 +55,6 @@ export async function GET() {
 
   } catch (error) {
     console.error("株価データ取得エラー:", error);
-    // エラーで画面を真っ白にさせないための安全設計
     return NextResponse.json({ success: true, data: fallbackData });
   }
 }

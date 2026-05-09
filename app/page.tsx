@@ -18,6 +18,8 @@ export default function Home() {
   const [user, setUser] = useState<User | null>(null);
   const [stocks, setStocks] = useState<Stock[]>([]);
   const [isLoadingStocks, setIsLoadingStocks] = useState(false);
+  const [analysis, setAnalysis] = useState<string>("");
+  const [isLoadingAnalysis, setIsLoadingAnalysis] = useState(false);
 
   useEffect(() => {
     const unsubscribe = auth.onAuthStateChanged((currentUser) => {
@@ -26,6 +28,7 @@ export default function Home() {
     return () => unsubscribe();
   }, []);
 
+  // 株価データの取得
   useEffect(() => {
     const fetchStocks = async () => {
       setIsLoadingStocks(true);
@@ -46,6 +49,34 @@ export default function Home() {
       fetchStocks();
     }
   }, [user]);
+
+  // 株価データが取得できたらAI分析を実行
+  useEffect(() => {
+    const fetchAnalysis = async () => {
+      if (stocks.length === 0 || analysis) return;
+      
+      setIsLoadingAnalysis(true);
+      try {
+        const response = await fetch('/api/analysis', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ stocks }),
+        });
+        const result = await response.json();
+        if (result.success) {
+          setAnalysis(result.analysis);
+        }
+      } catch (error) {
+        console.error("AI分析の取得に失敗しました:", error);
+      } finally {
+        setIsLoadingAnalysis(false);
+      }
+    };
+
+    if (stocks.length > 0) {
+      fetchAnalysis();
+    }
+  }, [stocks]);
 
   const handleLogin = async () => {
     try {
@@ -87,7 +118,7 @@ export default function Home() {
           {/* メインダッシュボードエリア */}
           <main className="flex-1 p-6 max-w-7xl mx-auto w-full space-y-6">
             
-            {/* 上段：主要指標（KPI）カード */}
+            {/* 上段：主要指標（KPI）カード（現在は静的データ） */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 flex flex-col justify-center">
                 <span className="text-xs font-medium text-slate-500 mb-1">日経平均先物</span>
@@ -111,7 +142,7 @@ export default function Home() {
               </div>
             </div>
 
-            {/* 中段：シナリオ分析とウォッチリスト */}
+            {/* 中段：AIシナリオ分析とウォッチリスト */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               
               {/* 左側：AIシナリオ分析 */}
@@ -124,13 +155,22 @@ export default function Home() {
                   <span className="text-[10px] font-bold bg-blue-100 text-blue-700 px-2 py-0.5 rounded uppercase tracking-wider">AI Generated</span>
                 </div>
                 <div className="p-6 flex-1 flex flex-col">
-                  <div className="flex-1 bg-slate-50 rounded-lg border border-dashed border-slate-200 p-8 flex flex-col items-center justify-center text-slate-400 min-h-[300px]">
-                    <svg className="w-10 h-10 mb-4 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z"></path></svg>
-                    <p className="text-sm text-center leading-relaxed">
-                      ここにGeminiから取得した市況シナリオが表示されます。<br/>
-                      マクロ環境や注目セクターの動向などが自動で要約される予定です。
-                    </p>
-                  </div>
+                  {isLoadingAnalysis ? (
+                    <div className="flex-1 flex flex-col items-center justify-center text-slate-400 min-h-[300px]">
+                      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mb-4"></div>
+                      <p className="text-sm">Geminiが相場を分析中...</p>
+                    </div>
+                  ) : analysis ? (
+                    <div className="flex-1 bg-blue-50/30 rounded-lg p-6 text-slate-700 leading-relaxed text-sm">
+                      {analysis}
+                    </div>
+                  ) : (
+                    <div className="flex-1 bg-slate-50 rounded-lg border border-dashed border-slate-200 p-8 flex flex-col items-center justify-center text-slate-400 min-h-[300px]">
+                      <p className="text-sm text-center">
+                        株価データを取得後、自動的に分析が開始されます。
+                      </p>
+                    </div>
+                  )}
                   <div className="mt-4 flex justify-end">
                     <button className="text-xs font-medium bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-md transition-colors flex items-center gap-1.5">
                       <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"></path></svg>
