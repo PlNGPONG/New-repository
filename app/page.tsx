@@ -5,8 +5,19 @@ import { useState, useEffect } from "react";
 import { auth, provider } from "../lib/firebase";
 import { signInWithPopup, signOut, User } from "firebase/auth";
 
+type Stock = {
+  ticker: string;
+  name: string;
+  price: number | null;
+  change: number | null;
+  changePercent: number | null;
+  note?: string;
+};
+
 export default function Home() {
   const [user, setUser] = useState<User | null>(null);
+  const [stocks, setStocks] = useState<Stock[]>([]);
+  const [isLoadingStocks, setIsLoadingStocks] = useState(false);
 
   useEffect(() => {
     const unsubscribe = auth.onAuthStateChanged((currentUser) => {
@@ -14,6 +25,27 @@ export default function Home() {
     });
     return () => unsubscribe();
   }, []);
+
+  useEffect(() => {
+    const fetchStocks = async () => {
+      setIsLoadingStocks(true);
+      try {
+        const response = await fetch('/api/stocks');
+        const result = await response.json();
+        if (result.success) {
+          setStocks(result.data);
+        }
+      } catch (error) {
+        console.error("株価データの取得に失敗しました:", error);
+      } finally {
+        setIsLoadingStocks(false);
+      }
+    };
+
+    if (user) {
+      fetchStocks();
+    }
+  }, [user]);
 
   const handleLogin = async () => {
     try {
@@ -82,7 +114,7 @@ export default function Home() {
             {/* 中段：シナリオ分析とウォッチリスト */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               
-              {/* 左側：AIシナリオ分析（2カラム分の幅を使用） */}
+              {/* 左側：AIシナリオ分析 */}
               <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-slate-100 flex flex-col overflow-hidden">
                 <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
                   <h2 className="text-base font-bold text-slate-800 flex items-center gap-2">
@@ -108,7 +140,7 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* 右側：個別銘柄ウォッチリスト（1カラム分の幅を使用） */}
+              {/* 右側：個別銘柄ウォッチリスト */}
               <div className="bg-white rounded-xl shadow-sm border border-slate-100 flex flex-col overflow-hidden">
                 <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50">
                   <h2 className="text-base font-bold text-slate-800 flex items-center gap-2">
@@ -118,56 +150,33 @@ export default function Home() {
                 </div>
                 <div className="p-0 flex-1 overflow-auto">
                   <ul className="divide-y divide-slate-100">
-                    <li className="px-6 py-4 hover:bg-slate-50 transition-colors flex justify-between items-center">
-                      <div>
-                        <span className="text-xs font-bold text-slate-500 block mb-0.5">8035</span>
-                        <span className="text-sm font-bold text-slate-800">東京エレクトロン</span>
-                      </div>
-                      <div className="text-right">
-                        <span className="text-sm font-bold text-slate-800 block">42,150</span>
-                        <span className="text-xs font-medium text-red-500">+450 (+1.08%)</span>
-                      </div>
-                    </li>
-                    <li className="px-6 py-4 hover:bg-slate-50 transition-colors flex justify-between items-center">
-                      <div>
-                        <span className="text-xs font-bold text-slate-500 block mb-0.5">6857</span>
-                        <span className="text-sm font-bold text-slate-800">アドバンテスト</span>
-                      </div>
-                      <div className="text-right">
-                        <span className="text-sm font-bold text-slate-800 block">7,840</span>
-                        <span className="text-xs font-medium text-red-500">+125 (+1.62%)</span>
-                      </div>
-                    </li>
-                    <li className="px-6 py-4 hover:bg-slate-50 transition-colors flex justify-between items-center">
-                      <div>
-                        <span className="text-xs font-bold text-slate-500 block mb-0.5">KIOXIA</span>
-                        <span className="text-sm font-bold text-slate-800">キオクシアHD</span>
-                      </div>
-                      <div className="text-right">
-                        <span className="text-sm font-bold text-slate-800 block">---</span>
-                        <span className="text-xs font-medium text-slate-400">IPO準備中</span>
-                      </div>
-                    </li>
-                    <li className="px-6 py-4 hover:bg-slate-50 transition-colors flex justify-between items-center">
-                      <div>
-                        <span className="text-xs font-bold text-slate-500 block mb-0.5">6594</span>
-                        <span className="text-sm font-bold text-slate-800">ニデック</span>
-                      </div>
-                      <div className="text-right">
-                        <span className="text-sm font-bold text-slate-800 block">7,210</span>
-                        <span className="text-xs font-medium text-green-500">-35 (-0.48%)</span>
-                      </div>
-                    </li>
-                    <li className="px-6 py-4 hover:bg-slate-50 transition-colors flex justify-between items-center">
-                      <div>
-                        <span className="text-xs font-bold text-slate-500 block mb-0.5">8306</span>
-                        <span className="text-sm font-bold text-slate-800">三菱UFJ</span>
-                      </div>
-                      <div className="text-right">
-                        <span className="text-sm font-bold text-slate-800 block">1,825.5</span>
-                        <span className="text-xs font-medium text-red-500">+12.0 (+0.66%)</span>
-                      </div>
-                    </li>
+                    {isLoadingStocks ? (
+                      <li className="px-6 py-8 text-center text-slate-500 text-sm">株価データを取得中...</li>
+                    ) : (
+                      stocks.map((stock) => (
+                        <li key={stock.ticker} className="px-6 py-4 hover:bg-slate-50 transition-colors flex justify-between items-center">
+                          <div>
+                            <span className="text-xs font-bold text-slate-500 block mb-0.5">{stock.ticker}</span>
+                            <span className="text-sm font-bold text-slate-800">{stock.name}</span>
+                          </div>
+                          <div className="text-right">
+                            {stock.price !== null ? (
+                              <>
+                                <span className="text-sm font-bold text-slate-800 block">{stock.price.toLocaleString()}</span>
+                                <span className={`text-xs font-medium ${stock.change && stock.change >= 0 ? 'text-red-500' : 'text-green-500'}`}>
+                                  {stock.change && stock.change > 0 ? '+' : ''}{stock.change} ({stock.changePercent && stock.changePercent > 0 ? '+' : ''}{stock.changePercent}%)
+                                </span>
+                              </>
+                            ) : (
+                              <>
+                                <span className="text-sm font-bold text-slate-800 block">---</span>
+                                <span className="text-xs font-medium text-slate-400">{stock.note}</span>
+                              </>
+                            )}
+                          </div>
+                        </li>
+                      ))
+                    )}
                   </ul>
                 </div>
               </div>
