@@ -32,13 +32,14 @@ export async function POST(request: Request) {
       .filter((s: string) => !kpiSymbols.some(kpi => kpi.ticker === s))
       .map((s: string) => ({ ticker: s, y_ticker: s.endsWith('.T') ? s : `${s}.T` }));
 
-    // 辞書と照らし合わせて名前を付与
+    // 辞書と照らし合わせて名前を付与（エラー解消のため us に型を明記）
     const allSymbols = [
       ...kpiSymbols, 
-      ...userSymbols.map(us => ({ ...us, name: defaultNames[us.ticker] || us.ticker }))
+      ...userSymbols.map((us: { ticker: string; y_ticker: string }) => ({ ...us, name: defaultNames[us.ticker] || us.ticker }))
     ];
 
-    const results = await Promise.all(allSymbols.map(async (s) => {
+    // 後続のエラーを未然に防ぐため、s にも型を明記
+    const results = await Promise.all(allSymbols.map(async (s: { ticker: string; name: string; y_ticker: string }) => {
       try {
         // 株価データの取得
         const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${s.y_ticker}?interval=1d&range=1d`, { cache: 'no-store' });
