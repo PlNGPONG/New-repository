@@ -1,37 +1,37 @@
 // app/api/stocks/route.ts
 import { NextResponse } from 'next/server';
 
-type StockData = {
-  ticker: string;
-  name: string;
-  price: number | null;
-  change: number | null;
-  changePercent: number | null;
-  note?: string;
-};
-
-export async function GET() {
+export async function POST(request: Request) {
   try {
-    // 取得対象：個別銘柄（.T）と指数・為替（.T, JPY=X等）
-    const symbols = [
-      { ticker: 'NI225', name: '日経平均先物', y_ticker: 'NI225.T' }, // 簡易的に現物指数を参照
+    const { symbols } = await request.json();
+
+    // 常に取得する主要KPI
+    const kpiSymbols = [
+      { ticker: 'NI225', name: '日経平均先物', y_ticker: 'NI225.T' },
       { ticker: 'TOPIX', name: 'TOPIX', y_ticker: '^TPX' },
       { ticker: 'USDJPY', name: '米ドル/円', y_ticker: 'JPY=X' },
-      { ticker: 'SOX', name: 'SOX指数', y_ticker: '^SOX' },
-      { ticker: '8035', name: '東京エレクトロン', y_ticker: '8035.T' },
-      { ticker: '6857', name: 'アドバンテスト', y_ticker: '6857.T' },
-      { ticker: '6594', name: 'ニデック', y_ticker: '6594.T' },
-      { ticker: '8306', name: '三菱UFJ', y_ticker: '8306.T' }
+      { ticker: 'SOX', name: 'SOX指数', y_ticker: '^SOX' }
     ];
 
-    const results = await Promise.all(symbols.map(async (s) => {
+    // 画面から送られてきた個別銘柄（KPIと重複しないようフィルタリング）
+    const userSymbols = (symbols || [])
+      .filter((s: string) => !kpiSymbols.some(kpi => kpi.ticker === s))
+      .map((s: string) => ({ ticker: s, name: s, y_ticker: s.endsWith('.T') ? s : `${s}.T` }));
+
+    const allSymbols = [...kpiSymbols, ...userSymbols];
+
+    const results = await Promise.all(allSymbols.map(async (s) => {
       try {
         const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${s.y_ticker}?interval=1d&range=1d`, { cache: 'no-store' });
+        if (!res.ok) throw new Error('Fetch failed');
         const data = await res.json();
+        
+        if (!data.chart || !data.chart.result || !data.chart.result[0]) throw new Error('No data');
         const meta = data.chart.result[0].meta;
+        
         return {
           ticker: s.ticker,
-          name: s.name + "(Live)",
+          name: s.ticker === s.name ? s.name : s.name + "(Live)",
           price: meta.regularMarketPrice,
           change: meta.regularMarketPrice - meta.chartPreviousClose,
           changePercent: ((meta.regularMarketPrice - meta.chartPreviousClose) / meta.chartPreviousClose) * 100
