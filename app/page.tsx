@@ -18,97 +18,127 @@ type Stock = {
 
 export default function Home() {
   const [user, setUser] = useState<User | null>(null);
+  
+  // 動的なリスト管理ステート
+  const [watchList, setWatchList] = useState<string[]>([]);
+  const [excludeList, setExcludeList] = useState<string[]>([]);
+  const [newTickerInput, setNewTickerInput] = useState("");
+  const [newExcludeInput, setNewExcludeInput] = useState("");
+  
+  // UI関連ステート
+  const [referenceText, setReferenceText] = useState("");
+  const [showSourceInput, setShowSourceInput] = useState(false);
   const [stocks, setStocks] = useState<Stock[]>([]);
   const [isLoadingStocks, setIsLoadingStocks] = useState(false);
   const [analysis, setAnalysis] = useState<string>("");
   const [isLoadingAnalysis, setIsLoadingAnalysis] = useState(false);
   const [analysisError, setAnalysisError] = useState<string>("");
 
+  // 初期ロード：ブラウザの保存領域からリストを復元
   useEffect(() => {
     const unsubscribe = auth.onAuthStateChanged((currentUser) => {
       setUser(currentUser);
     });
+
+    const savedWatchList = localStorage.getItem('watchList');
+    if (savedWatchList) {
+      setWatchList(JSON.parse(savedWatchList));
+    } else {
+      setWatchList(['8035', '6857', '6594', '8306']); // 初期銘柄
+    }
+
+    const savedExcludeList = localStorage.getItem('excludeList');
+    if (savedExcludeList) {
+      setExcludeList(JSON.parse(savedExcludeList));
+    }
+
     return () => unsubscribe();
   }, []);
 
-  // 株価データの取得
+  // リストが変更されたら保存領域を更新
   useEffect(() => {
-    const fetchStocks = async () => {
-      setIsLoadingStocks(true);
-      try {
-        const response = await fetch('/api/stocks');
-        const result = await response.json();
-        if (result.success) {
-          setStocks(result.data);
-        }
-      } catch (error) {
-        console.error("株価データの取得に失敗しました:", error);
-      } finally {
-        setIsLoadingStocks(false);
-      }
-    };
+    if (watchList.length > 0) localStorage.setItem('watchList', JSON.stringify(watchList));
+  }, [watchList]);
 
-    if (user) {
+  useEffect(() => {
+    localStorage.setItem('excludeList', JSON.stringify(excludeList));
+  }, [excludeList]);
+
+  // 株価データの取得関数
+  const fetchStocks = async () => {
+    if (watchList.length === 0) return;
+    setIsLoadingStocks(true);
+    try {
+      const response = await fetch('/api/stocks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbols: watchList }),
+      });
+      const result = await response.json();
+      if (result.success) setStocks(result.data);
+    } catch (error) {
+      console.error("株価データの取得に失敗しました:", error);
+    } finally {
+      setIsLoadingStocks(false);
+    }
+  };
+
+  // ユーザーログイン時、またはウォッチリスト増減時に株価を再取得
+  useEffect(() => {
+    if (user && watchList.length > 0) {
       fetchStocks();
     }
-  }, [user]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, watchList.length]);
 
-  // 株価データが取得できたらAI分析を実行
-  useEffect(() => {
-    const fetchAnalysis = async () => {
-      if (stocks.length === 0 || analysis) return;
+  // AI分析の実行関数
+  const handleAnalysis = async (mode: 'deep' | 'quick') => {
+    if (stocks.length === 0) return;
+    setIsLoadingAnalysis(true);
+    setAnalysisError("");
+    
+    try {
+      const response = await fetch('/api/analysis', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stocks, mode, excludeList, referenceText }),
+      });
+      const result = await response.json();
       
-      setIsLoadingAnalysis(true);
-      setAnalysisError("");
-      
-      try {
-        const response = await fetch('/api/analysis', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ stocks }),
-        });
-        const result = await response.json();
+      if (result.success) {
+        setAnalysis(result.analysis);
         
-        if (result.success) {
-          setAnalysis(result.analysis);
-        } else {
-          setAnalysisError(result.error || "分析データの生成に失敗しました");
+        // AIが提案した新規銘柄を自動的にウォッチリストに追加
+        if (result.newTickers && result.newTickers.length > 0) {
+          setWatchList(prev => {
+            const updated = [...new Set([...prev, ...result.newTickers])];
+            return updated;
+          });
         }
-      } catch (error) {
-        console.error("AI分析の取得に失敗しました:", error);
-        setAnalysisError("サーバーとの通信に失敗しました");
-      } finally {
-        setIsLoadingAnalysis(false);
+      } else {
+        setAnalysisError(result.error || "分析データの生成に失敗しました");
       }
-    };
-
-    if (stocks.length > 0) {
-      fetchAnalysis();
-    }
-  }, [stocks]);
-
-  const handleLogin = async () => {
-    try {
-      await signInWithPopup(auth, provider);
     } catch (error) {
-      console.error("ログインエラー:", error);
+      console.error("AI分析の取得に失敗しました:", error);
+      setAnalysisError("サーバーとの通信に失敗しました");
+    } finally {
+      setIsLoadingAnalysis(false);
     }
   };
 
-  const handleLogout = async () => {
-    try {
-      await signOut(auth);
-    } catch (error) {
-      console.error("ログアウトエラー:", error);
-    }
+  const handleRemoveTicker = (ticker: string) => {
+    setWatchList(prev => prev.filter(t => t !== ticker));
   };
 
-  // KPI用データとウォッチリスト用データに分割
+  const handleRemoveExclude = (ticker: string) => {
+    setExcludeList(prev => prev.filter(t => t !== ticker));
+  };
+
   const kpiSymbols = ['NI225', 'TOPIX', 'USDJPY', 'SOX'];
   const watchListStocks = stocks.filter(stock => !kpiSymbols.includes(stock.ticker));
 
   return (
-    <div className="min-h-screen bg-slate-100">
+    <div className="min-h-screen bg-slate-100 pb-10">
       {user ? (
         <div className="flex flex-col min-h-screen">
           {/* ヘッダーエリア */}
@@ -119,19 +149,15 @@ export default function Home() {
                 <img src={user.photoURL} alt="プロフィール" className="w-9 h-9 rounded-full ring-2 ring-slate-100" />
               )}
               <span className="text-sm font-medium text-slate-700 hidden sm:block">{user.displayName}</span>
-              <button 
-                onClick={handleLogout} 
-                className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-1.5 rounded-md transition-colors"
-              >
+              <button onClick={() => signOut(auth)} className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-1.5 rounded-md transition-colors">
                 ログアウト
               </button>
             </div>
           </header>
 
-          {/* メインダッシュボードエリア */}
           <main className="flex-1 p-6 max-w-7xl mx-auto w-full space-y-6">
             
-            {/* 上段：主要指標（KPI）カード（API連携） */}
+            {/* KPIカード */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               {kpiSymbols.map(ticker => {
                 const stock = stocks.find(s => s.ticker === ticker);
@@ -143,9 +169,9 @@ export default function Home() {
                         <span className="text-xl font-bold text-slate-800">
                           {stock.price !== null ? stock.price.toLocaleString(undefined, { minimumFractionDigits: ticker === 'USDJPY' ? 2 : 0, maximumFractionDigits: 2 }) : '---'}
                         </span>
-                        <span className={`text-sm font-medium mt-1 ${stock.change && stock.change >= 0 ? 'text-red-500' : 'text-green-500'}`}>
-                          {stock.change && stock.change > 0 ? '+' : ''}{stock.change !== null ? stock.change.toLocaleString(undefined, { maximumFractionDigits: 2 }) : '---'} 
-                          ({stock.changePercent && stock.changePercent > 0 ? '+' : ''}{stock.changePercent !== null ? stock.changePercent.toFixed(2) : '---'}%)
+                        <span className={`text-sm font-medium mt-1 ${(stock.change ?? 0) >= 0 ? 'text-red-500' : 'text-green-500'}`}>
+                          {(stock.change ?? 0) > 0 ? '+' : ''}{stock.change !== null ? stock.change.toLocaleString(undefined, { maximumFractionDigits: 2 }) : '---'} 
+                          ({(stock.changePercent ?? 0) > 0 ? '+' : ''}{stock.changePercent !== null ? stock.changePercent.toFixed(2) : '---'}%)
                         </span>
                       </>
                     ) : (
@@ -156,7 +182,55 @@ export default function Home() {
               })}
             </div>
 
-            {/* 中段：シナリオ分析とウォッチリスト */}
+            {/* コントロールパネル */}
+            <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-100 grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <h3 className="text-sm font-bold text-slate-700 mb-2">除外リスト（分析・監視のみ、買い推奨を行わない）</h3>
+                <div className="flex gap-2 mb-3">
+                  <input 
+                    type="text" 
+                    placeholder="銘柄コード(例: 9984)" 
+                    value={newExcludeInput} 
+                    onChange={e => setNewExcludeInput(e.target.value)} 
+                    className="border border-slate-300 px-3 py-1.5 text-sm rounded-md flex-1"
+                  />
+                  <button 
+                    onClick={() => { if(newExcludeInput) { setExcludeList([...newExcludeList, newExcludeInput]); setNewExcludeInput(""); } }} 
+                    className="bg-slate-200 hover:bg-slate-300 text-slate-700 px-4 py-1.5 text-sm rounded-md font-medium"
+                  >追加</button>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {excludeList.map(ticker => (
+                    <span key={ticker} className="bg-red-50 text-red-600 border border-red-200 text-xs px-2 py-1 rounded-md flex items-center gap-1">
+                      {ticker} <button onClick={() => handleRemoveExclude(ticker)} className="font-bold ml-1 hover:text-red-800">×</button>
+                    </span>
+                  ))}
+                  {excludeList.length === 0 && <span className="text-xs text-slate-400">登録なし</span>}
+                </div>
+              </div>
+              
+              <div>
+                <div className="flex justify-between items-center mb-2">
+                  <h3 className="text-sm font-bold text-slate-700">Source Input（ニュースや仮説のテキスト入力）</h3>
+                  <button onClick={() => setShowSourceInput(!showSourceInput)} className="text-xs text-blue-600 hover:underline">
+                    {showSourceInput ? '閉じる' : 'Add Source'}
+                  </button>
+                </div>
+                {showSourceInput ? (
+                  <textarea 
+                    value={referenceText}
+                    onChange={(e) => setReferenceText(e.target.value)}
+                    placeholder="ここに日銀の発表内容や気になるニュースのテキストを貼り付けると、AIが考慮して分析します。"
+                    className="w-full border border-slate-300 rounded-md p-3 text-sm min-h-[80px]"
+                  />
+                ) : (
+                  <div className="bg-slate-50 border border-dashed border-slate-300 rounded-md p-3 text-sm text-slate-400 cursor-pointer" onClick={() => setShowSourceInput(true)}>
+                    ここをクリックして参考テキストを追加...
+                  </div>
+                )}
+              </div>
+            </div>
+
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               
               {/* 左側：AIシナリオ分析 */}
@@ -166,22 +240,29 @@ export default function Home() {
                     <span className="w-1.5 h-4 bg-blue-600 rounded-full"></span>
                     本日のシナリオ分析
                   </h2>
-                  <span className="text-[10px] font-bold bg-blue-100 text-blue-700 px-2 py-0.5 rounded uppercase tracking-wider">AI Generated</span>
+                  <div className="flex gap-2">
+                    <button onClick={() => handleAnalysis('quick')} disabled={isLoadingAnalysis} className="text-xs font-bold bg-amber-100 hover:bg-amber-200 text-amber-800 px-3 py-1.5 rounded-md transition-colors shadow-sm">
+                      クイックモード実行
+                    </button>
+                    <button onClick={() => handleAnalysis('deep')} disabled={isLoadingAnalysis} className="text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-md transition-colors shadow-sm">
+                      じっくりモード実行
+                    </button>
+                  </div>
                 </div>
                 <div className="p-6 flex-1 flex flex-col">
                   {isLoadingAnalysis ? (
-                    <div className="flex-1 flex flex-col items-center justify-center text-slate-400 min-h-[300px]">
+                    <div className="flex-1 flex flex-col items-center justify-center text-slate-400 min-h-[400px]">
                       <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mb-4"></div>
-                      <p className="text-sm">Geminiが相場を分析中...</p>
+                      <p className="text-sm">Geminiが市場を分析中...</p>
+                      <p className="text-xs mt-2 text-slate-300">※じっくりモードは検索を含むため十数秒かかります</p>
                     </div>
                   ) : analysisError ? (
-                    <div className="flex-1 bg-red-50 rounded-lg border border-red-100 p-8 flex flex-col items-center justify-center text-red-500 min-h-[300px]">
-                      <svg className="w-10 h-10 mb-4 opacity-70" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
-                      <p className="text-base font-bold mb-2">AI分析でエラーが発生しました</p>
+                    <div className="flex-1 bg-red-50 rounded-lg border border-red-100 p-8 flex flex-col items-center justify-center text-red-500 min-h-[400px]">
+                      <p className="text-base font-bold mb-2">エラーが発生しました</p>
                       <p className="text-sm text-center">{analysisError}</p>
                     </div>
                   ) : analysis ? (
-                    <div className="flex-1 bg-blue-50/30 rounded-lg p-6 text-slate-700 text-sm overflow-auto max-h-[600px]">
+                    <div className="flex-1 bg-blue-50/30 rounded-lg p-6 text-slate-700 text-sm overflow-auto min-h-[400px]">
                       <ReactMarkdown 
                         remarkPlugins={[remarkGfm]}
                         components={{
@@ -192,16 +273,15 @@ export default function Home() {
                           h3: ({node, ...props}) => <h3 className="text-base font-bold text-slate-800 mt-5 mb-2" {...props} />,
                           p: ({node, ...props}) => <p className="mb-4 leading-relaxed" {...props} />,
                           ul: ({node, ...props}) => <ul className="list-disc pl-5 mb-4 space-y-1" {...props} />,
-                          ol: ({node, ...props}) => <ol className="list-decimal pl-5 mb-4 space-y-1" {...props} />,
                         }}
                       >
                         {analysis}
                       </ReactMarkdown>
                     </div>
                   ) : (
-                    <div className="flex-1 bg-slate-50 rounded-lg border border-dashed border-slate-200 p-8 flex flex-col items-center justify-center text-slate-400 min-h-[300px]">
+                    <div className="flex-1 bg-slate-50 rounded-lg border border-dashed border-slate-200 p-8 flex flex-col items-center justify-center text-slate-400 min-h-[400px]">
                       <p className="text-sm text-center">
-                        株価データを取得後、自動的に分析が開始されます。
+                        右上のボタンからモードを選んで分析を開始してください。
                       </p>
                     </div>
                   )}
@@ -210,37 +290,55 @@ export default function Home() {
 
               {/* 右側：個別銘柄ウォッチリスト */}
               <div className="bg-white rounded-xl shadow-sm border border-slate-100 flex flex-col overflow-hidden h-fit max-h-[800px]">
-                <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50">
+                <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
                   <h2 className="text-base font-bold text-slate-800 flex items-center gap-2">
                     <span className="w-1.5 h-4 bg-emerald-500 rounded-full"></span>
                     ウォッチリスト
                   </h2>
                 </div>
+                
+                {/* 銘柄追加フォーム */}
+                <div className="px-4 py-3 border-b border-slate-100 bg-white flex gap-2">
+                  <input 
+                    type="text" 
+                    placeholder="銘柄コード(追加)" 
+                    value={newTickerInput} 
+                    onChange={e => setNewTickerInput(e.target.value)} 
+                    className="border border-slate-300 px-3 py-1.5 text-sm rounded-md flex-1"
+                  />
+                  <button 
+                    onClick={() => { if(newTickerInput) { setWatchList([...watchList, newTickerInput]); setNewTickerInput(""); } }} 
+                    className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-4 py-1.5 text-sm rounded-md font-bold transition-colors"
+                  >追加</button>
+                </div>
+
                 <div className="p-0 flex-1 overflow-auto">
                   <ul className="divide-y divide-slate-100">
                     {isLoadingStocks ? (
                       <li className="px-6 py-8 text-center text-slate-500 text-sm">株価データを取得中...</li>
                     ) : (
                       watchListStocks.map((stock) => (
-                        <li key={stock.ticker} className="px-6 py-4 hover:bg-slate-50 transition-colors flex justify-between items-center">
+                        <li key={stock.ticker} className="px-4 py-3 hover:bg-slate-50 transition-colors flex justify-between items-center group">
                           <div>
                             <span className="text-xs font-bold text-slate-500 block mb-0.5">{stock.ticker}</span>
-                            <span className="text-sm font-bold text-slate-800">{stock.name}</span>
+                            <span className="text-sm font-bold text-slate-800">{stock.name.replace('(Live)', '')}</span>
                           </div>
-                          <div className="text-right">
-                            {stock.price !== null ? (
-                              <>
-                                <span className="text-sm font-bold text-slate-800 block">{stock.price.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
-                                <span className={`text-xs font-medium ${stock.change && stock.change >= 0 ? 'text-red-500' : 'text-green-500'}`}>
-                                  {stock.change && stock.change > 0 ? '+' : ''}{stock.change.toLocaleString(undefined, { maximumFractionDigits: 2 })} ({stock.changePercent && stock.changePercent > 0 ? '+' : ''}{stock.changePercent.toFixed(2)}%)
-                                </span>
-                              </>
-                            ) : (
-                              <>
-                                <span className="text-sm font-bold text-slate-800 block">---</span>
+                          <div className="flex items-center gap-4">
+                            <div className="text-right">
+                              {stock.price !== null ? (
+                                <>
+                                  <span className="text-sm font-bold text-slate-800 block">{stock.price.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+                                  <span className={`text-xs font-medium ${(stock.change ?? 0) >= 0 ? 'text-red-500' : 'text-green-500'}`}>
+                                    {(stock.change ?? 0) > 0 ? '+' : ''}{stock.change !== null ? stock.change.toLocaleString(undefined, { maximumFractionDigits: 2 }) : '---'} ({(stock.changePercent ?? 0) > 0 ? '+' : ''}{stock.changePercent !== null ? stock.changePercent.toFixed(2) : '---'}%)
+                                  </span>
+                                </>
+                              ) : (
                                 <span className="text-xs font-medium text-slate-400">{stock.note}</span>
-                              </>
-                            )}
+                              )}
+                            </div>
+                            <button onClick={() => handleRemoveTicker(stock.ticker)} className="text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                            </button>
                           </div>
                         </li>
                       ))
