@@ -195,7 +195,8 @@ export default function Home() {
                     className="border border-slate-300 px-3 py-1.5 text-sm rounded-md flex-1"
                   />
                   <button 
-                    onClick={() => { if(newExcludeInput) { setExcludeList([...newExcludeList, newExcludeInput]); setNewExcludeInput(""); } }} 
+                    // ここがエラーの原因でした（newExcludeList → excludeList に修正）
+                    onClick={() => { if(newExcludeInput) { setExcludeList([...excludeList, newExcludeInput]); setNewExcludeInput(""); } }} 
                     className="bg-slate-200 hover:bg-slate-300 text-slate-700 px-4 py-1.5 text-sm rounded-md font-medium"
                   >追加</button>
                 </div>
