@@ -4,6 +4,8 @@
 import { useState, useEffect } from "react";
 import { auth, provider } from "../lib/firebase";
 import { signInWithPopup, signOut, User } from "firebase/auth";
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 type Stock = {
   ticker: string;
@@ -20,6 +22,7 @@ export default function Home() {
   const [isLoadingStocks, setIsLoadingStocks] = useState(false);
   const [analysis, setAnalysis] = useState<string>("");
   const [isLoadingAnalysis, setIsLoadingAnalysis] = useState(false);
+  const [analysisError, setAnalysisError] = useState<string>("");
 
   useEffect(() => {
     const unsubscribe = auth.onAuthStateChanged((currentUser) => {
@@ -56,6 +59,8 @@ export default function Home() {
       if (stocks.length === 0 || analysis) return;
       
       setIsLoadingAnalysis(true);
+      setAnalysisError("");
+      
       try {
         const response = await fetch('/api/analysis', {
           method: 'POST',
@@ -63,11 +68,15 @@ export default function Home() {
           body: JSON.stringify({ stocks }),
         });
         const result = await response.json();
+        
         if (result.success) {
           setAnalysis(result.analysis);
+        } else {
+          setAnalysisError(result.error || "分析データの生成に失敗しました");
         }
       } catch (error) {
         console.error("AI分析の取得に失敗しました:", error);
+        setAnalysisError("サーバーとの通信に失敗しました");
       } finally {
         setIsLoadingAnalysis(false);
       }
@@ -94,6 +103,10 @@ export default function Home() {
     }
   };
 
+  // KPI用データとウォッチリスト用データに分割
+  const kpiSymbols = ['NI225', 'TOPIX', 'USDJPY', 'SOX'];
+  const watchListStocks = stocks.filter(stock => !kpiSymbols.includes(stock.ticker));
+
   return (
     <div className="min-h-screen bg-slate-100">
       {user ? (
@@ -118,31 +131,32 @@ export default function Home() {
           {/* メインダッシュボードエリア */}
           <main className="flex-1 p-6 max-w-7xl mx-auto w-full space-y-6">
             
-            {/* 上段：主要指標（KPI）カード（現在は静的データ） */}
+            {/* 上段：主要指標（KPI）カード（API連携） */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 flex flex-col justify-center">
-                <span className="text-xs font-medium text-slate-500 mb-1">日経平均先物</span>
-                <span className="text-xl font-bold text-slate-800">52,430.50</span>
-                <span className="text-sm font-medium text-red-500 mt-1">+120.30 (+0.23%)</span>
-              </div>
-              <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 flex flex-col justify-center">
-                <span className="text-xs font-medium text-slate-500 mb-1">TOPIX</span>
-                <span className="text-xl font-bold text-slate-800">3,450.10</span>
-                <span className="text-sm font-medium text-red-500 mt-1">+15.20 (+0.44%)</span>
-              </div>
-              <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 flex flex-col justify-center">
-                <span className="text-xs font-medium text-slate-500 mb-1">米ドル/円</span>
-                <span className="text-xl font-bold text-slate-800">148.25</span>
-                <span className="text-sm font-medium text-green-500 mt-1">-0.15 (-0.10%)</span>
-              </div>
-              <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 flex flex-col justify-center">
-                <span className="text-xs font-medium text-slate-500 mb-1">SOX指数</span>
-                <span className="text-xl font-bold text-slate-800">5,820.40</span>
-                <span className="text-sm font-medium text-red-500 mt-1">+85.60 (+1.49%)</span>
-              </div>
+              {kpiSymbols.map(ticker => {
+                const stock = stocks.find(s => s.ticker === ticker);
+                return (
+                  <div key={ticker} className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 flex flex-col justify-center h-24">
+                    {stock ? (
+                      <>
+                        <span className="text-xs font-medium text-slate-500 mb-1">{stock.name.replace('(Live)', '')}</span>
+                        <span className="text-xl font-bold text-slate-800">
+                          {stock.price !== null ? stock.price.toLocaleString(undefined, { minimumFractionDigits: ticker === 'USDJPY' ? 2 : 0, maximumFractionDigits: 2 }) : '---'}
+                        </span>
+                        <span className={`text-sm font-medium mt-1 ${stock.change && stock.change >= 0 ? 'text-red-500' : 'text-green-500'}`}>
+                          {stock.change && stock.change > 0 ? '+' : ''}{stock.change !== null ? stock.change.toLocaleString(undefined, { maximumFractionDigits: 2 }) : '---'} 
+                          ({stock.changePercent && stock.changePercent > 0 ? '+' : ''}{stock.changePercent !== null ? stock.changePercent.toFixed(2) : '---'}%)
+                        </span>
+                      </>
+                    ) : (
+                      <span className="text-sm text-slate-400">取得中...</span>
+                    )}
+                  </div>
+                );
+              })}
             </div>
 
-            {/* 中段：AIシナリオ分析とウォッチリスト */}
+            {/* 中段：シナリオ分析とウォッチリスト */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               
               {/* 左側：AIシナリオ分析 */}
@@ -160,9 +174,29 @@ export default function Home() {
                       <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mb-4"></div>
                       <p className="text-sm">Geminiが相場を分析中...</p>
                     </div>
+                  ) : analysisError ? (
+                    <div className="flex-1 bg-red-50 rounded-lg border border-red-100 p-8 flex flex-col items-center justify-center text-red-500 min-h-[300px]">
+                      <svg className="w-10 h-10 mb-4 opacity-70" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                      <p className="text-base font-bold mb-2">AI分析でエラーが発生しました</p>
+                      <p className="text-sm text-center">{analysisError}</p>
+                    </div>
                   ) : analysis ? (
-                    <div className="flex-1 bg-blue-50/30 rounded-lg p-6 text-slate-700 leading-relaxed text-sm">
-                      {analysis}
+                    <div className="flex-1 bg-blue-50/30 rounded-lg p-6 text-slate-700 text-sm overflow-auto max-h-[600px]">
+                      <ReactMarkdown 
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                          table: ({node, ...props}) => <div className="overflow-x-auto"><table className="w-full border-collapse border border-slate-300 my-4 bg-white text-xs" {...props} /></div>,
+                          th: ({node, ...props}) => <th className="border border-slate-300 bg-slate-100 px-3 py-2 text-left font-bold text-slate-800" {...props} />,
+                          td: ({node, ...props}) => <td className="border border-slate-300 px-3 py-2 text-slate-700" {...props} />,
+                          h2: ({node, ...props}) => <h2 className="text-lg font-bold text-slate-800 mt-6 mb-3 border-b border-slate-200 pb-1" {...props} />,
+                          h3: ({node, ...props}) => <h3 className="text-base font-bold text-slate-800 mt-5 mb-2" {...props} />,
+                          p: ({node, ...props}) => <p className="mb-4 leading-relaxed" {...props} />,
+                          ul: ({node, ...props}) => <ul className="list-disc pl-5 mb-4 space-y-1" {...props} />,
+                          ol: ({node, ...props}) => <ol className="list-decimal pl-5 mb-4 space-y-1" {...props} />,
+                        }}
+                      >
+                        {analysis}
+                      </ReactMarkdown>
                     </div>
                   ) : (
                     <div className="flex-1 bg-slate-50 rounded-lg border border-dashed border-slate-200 p-8 flex flex-col items-center justify-center text-slate-400 min-h-[300px]">
@@ -171,17 +205,11 @@ export default function Home() {
                       </p>
                     </div>
                   )}
-                  <div className="mt-4 flex justify-end">
-                    <button className="text-xs font-medium bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-md transition-colors flex items-center gap-1.5">
-                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"></path></svg>
-                      Add Source
-                    </button>
-                  </div>
                 </div>
               </div>
 
               {/* 右側：個別銘柄ウォッチリスト */}
-              <div className="bg-white rounded-xl shadow-sm border border-slate-100 flex flex-col overflow-hidden">
+              <div className="bg-white rounded-xl shadow-sm border border-slate-100 flex flex-col overflow-hidden h-fit max-h-[800px]">
                 <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50">
                   <h2 className="text-base font-bold text-slate-800 flex items-center gap-2">
                     <span className="w-1.5 h-4 bg-emerald-500 rounded-full"></span>
@@ -193,7 +221,7 @@ export default function Home() {
                     {isLoadingStocks ? (
                       <li className="px-6 py-8 text-center text-slate-500 text-sm">株価データを取得中...</li>
                     ) : (
-                      stocks.map((stock) => (
+                      watchListStocks.map((stock) => (
                         <li key={stock.ticker} className="px-6 py-4 hover:bg-slate-50 transition-colors flex justify-between items-center">
                           <div>
                             <span className="text-xs font-bold text-slate-500 block mb-0.5">{stock.ticker}</span>
@@ -202,9 +230,9 @@ export default function Home() {
                           <div className="text-right">
                             {stock.price !== null ? (
                               <>
-                                <span className="text-sm font-bold text-slate-800 block">{stock.price.toLocaleString()}</span>
+                                <span className="text-sm font-bold text-slate-800 block">{stock.price.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
                                 <span className={`text-xs font-medium ${stock.change && stock.change >= 0 ? 'text-red-500' : 'text-green-500'}`}>
-                                  {stock.change && stock.change > 0 ? '+' : ''}{stock.change} ({stock.changePercent && stock.changePercent > 0 ? '+' : ''}{stock.changePercent}%)
+                                  {stock.change && stock.change > 0 ? '+' : ''}{stock.change.toLocaleString(undefined, { maximumFractionDigits: 2 })} ({stock.changePercent && stock.changePercent > 0 ? '+' : ''}{stock.changePercent.toFixed(2)}%)
                                 </span>
                               </>
                             ) : (
