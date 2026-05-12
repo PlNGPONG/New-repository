@@ -7,56 +7,80 @@ export async function POST(request: Request) {
   if (!apiKey) return NextResponse.json({ success: false, error: 'APIキー未設定' });
 
   try {
-    const { stocks } = await request.json();
+    const { stocks, mode, excludeList, referenceText } = await request.json();
     const genAI = new GoogleGenerativeAI(apiKey);
     
-    // Web検索機能を有効化
+    const isDeepMode = mode === 'deep';
     const model = genAI.getGenerativeModel({ 
       model: "gemini-2.0-flash",
-      tools: [{ googleSearch: {} }] as any 
+      tools: isDeepMode ? [{ googleSearch: {} }] as any : undefined
     });
 
-    const stockInfo = stocks.map((s: any) => `${s.name}: ${s.price}円 (${s.changePercent?.toFixed(2)}%)`).join(', ');
+    const stockInfo = stocks.map((s: any) => `${s.name}(${s.ticker}): ${s.price}円 (${s.changePercent?.toFixed(2)}%)`).join(', ');
+    const excludeInfo = excludeList && excludeList.length > 0 ? excludeList.join(', ') : 'なし';
 
     const prompt = `
       # 指示
-      あなたはプロの短期トレードアナリストです。以下の要件で日本株市場のレポートを作成してください。
-      なお、出力文章の中にアスタリスク記号による強調は絶対に使用しないでください。見出しや強調には「」や【】を利用してください。
+      あなたは超一流の短期トレードアナリストです。
+      「虫の目（個別・需給）」と「鳥の目（マクロ・ニュース）」を激しく往復しながら、具体的かつ説得力のある分析を提供してください。
+      出力に「**」は絶対に使用せず、見出しは【】や「」を使ってください。
+
+      # 分析の必須条件
+      - ウォッチリスト外の銘柄も積極的に発注案に含めること。
+      - コメントは極めて具体的に（例：地政学リスクなら「米イラン」だけでなく具体的な場所や原油価格の閾値、FRBの具体的な発言日など）。
+      - 銘柄を記載する際は必ず「銘柄名（4桁コード）」の形式にすること。
 
       # 投資前提
-      - 投資資金：1,600万円
-      - 投資期間：数日～2週間（短期）
+      - 資金：1,600万円 / 期間：数日～2週間
       
-      # 現在の市場データ
-      ${stockInfo}
+      # インプットデータ
+      - 市場データ：${stockInfo}
+      - ユーザー提供資料：${referenceText || "なし"}
+      - 除外銘柄（発注禁止）：${excludeInfo}
 
-      # 分析ステップ
-      1. 【鳥の目】最新のニュース、為替、金利、地政学リスクをWeb検索で取得し、マクロ環境を整理せよ。
-      2. 【プレーヤー推定】海外投資家、CTA、事業会社の自社株買い、個人信用の需給状況を推定せよ。
-      3. 【虫の目】上記を踏まえ、個別銘柄（特に半導体、銀行）のチャートと需給から買い適性を判断せよ。
-      4. 【銘柄入替提案】現在の相場環境に基づき、現在のウォッチリストから外すべき銘柄と、新たに追加すべき有力なセクター・銘柄（2～3銘柄）を具体的に提案せよ。
+      # モード：${isDeepMode ? '【じっくりモード：広範な調査】' : '【クイックモード：迅速な戦術調整】'}
+      ${isDeepMode 
+        ? '前夜のNY市場動向、VIX指数、米国債利回り、為替、原油価格、主要な地政学ニュースをWeb検索で精査し、海外投資家やCTAの行動規範に照らし合わせて分析せよ。' 
+        : '現在の株価と主要指標から、即時的な需給の歪みと戦術的なエントリー可否を判断せよ。'}
 
-      # 出力フォーマット（厳守）
+      # 出力フォーマット
       ## 1. サマリー
-      （100字以内の総評）
+      （100字以内の切れ味鋭い総評）
 
       ## 2. 発注案
-      | 銘柄名 | 買い適性 | エントリーゾーン | 予定ロット(数量/金額) | ターゲット | ロスカット | 想定リスク | R/R |
-      | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-      | (銘柄名) | (高/中/低) | (価格帯) | (株数/万円) | (目標価格) | (LC価格) | (円換算) | (比率) |
+      | 銘柄名(コード) | 買い適性 | エントリーゾーン | 予定ロット(数量/金額) | ターゲット | ロスカット | 想定リスク | R/R | コメント |
+      | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+      | 銘柄(XXXX) | 高/中/低 | 価格 | 数/万円 | 目標 | LC | 円換算 | 比率 | 根拠 |
 
-      ## 3. アナリストコメント
-      （心理・需給・外部要因の詳細）
+      ## 3. アナリスト詳細レポート
+      - 【マクロ・需給】
+      - 【セクター・個別】
+      （具体数値や具体的なニュース名を含めて記述）
 
       ## 4. 銘柄入替提案
-      【除外候補】（理由）
-      【新規追加候補】（銘柄名・理由）
+      【除外・様子見】（銘柄名・コード・理由）
+      【新規追加候補】（銘柄名・コード・理由。環境に合致する多様な銘柄を提示せよ）
+
+      回答の最後に必ず以下のJSONを出力してください。
+      \`\`\`json
+      { "new_tickers": ["XXXX", "YYYY"] }
+      \`\`\`
     `;
 
     const result = await model.generateContent(prompt);
     const text = result.response.text();
 
-    return NextResponse.json({ success: true, analysis: text });
+    let newTickers = [];
+    const jsonMatch = text.match(/```json\n([\s\S]*?)\n```/);
+    if (jsonMatch && jsonMatch[1]) {
+      try {
+        const parsed = JSON.parse(jsonMatch[1]);
+        if (parsed.new_tickers) newTickers = parsed.new_tickers;
+      } catch (e) {}
+    }
+
+    const cleanText = text.replace(/```json\n[\s\S]*?\n```/, '').trim();
+    return NextResponse.json({ success: true, analysis: cleanText, newTickers });
   } catch (error) {
     return NextResponse.json({ success: false, error: '分析エラー' });
   }
