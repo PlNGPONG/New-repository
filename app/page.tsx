@@ -2,8 +2,9 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { auth, provider } from "../lib/firebase";
+import { auth, provider, db } from "../lib/firebase";
 import { signInWithPopup, signOut, User } from "firebase/auth";
+import { doc, getDoc, setDoc } from "firebase/firestore";
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -31,22 +32,50 @@ export default function Home() {
   const [analysisError, setAnalysisError] = useState<string>("");
   const [lastUpdated, setLastUpdated] = useState<string>("");
 
+  // ユーザーログイン状態の監視と、Firestoreからのデータ取得
   useEffect(() => {
-    const unsubscribe = auth.onAuthStateChanged((u) => setUser(u));
-    const savedWatch = localStorage.getItem('watchList');
-    setWatchList(savedWatch ? JSON.parse(savedWatch) : ['8035', '6857', '6594', '8306']);
-    const savedExclude = localStorage.getItem('excludeList');
-    setExcludeList(savedExclude ? JSON.parse(savedExclude) : []);
+    const unsubscribe = auth.onAuthStateChanged(async (currentUser) => {
+      setUser(currentUser);
+      if (currentUser) {
+        // ログインしたらFirestoreからその人の専用リストを取得
+        try {
+          const docRef = doc(db, "users", currentUser.uid);
+          const docSnap = await getDoc(docRef);
+          if (docSnap.exists()) {
+            const data = docSnap.data();
+            setWatchList(data.watchList || ['8035', '6857', '6594', '8306']);
+            setExcludeList(data.excludeList || []);
+          } else {
+            setWatchList(['8035', '6857', '6594', '8306']);
+          }
+        } catch (error) {
+          console.error("データ取得エラー:", error);
+          setWatchList(['8035', '6857', '6594', '8306']);
+        }
+      } else {
+        setWatchList([]);
+        setExcludeList([]);
+      }
+    });
     return () => unsubscribe();
   }, []);
 
+  // リストが変更されたらFirestoreへ自動保存
   useEffect(() => {
-    if (watchList.length > 0) localStorage.setItem('watchList', JSON.stringify(watchList));
-  }, [watchList]);
-
-  useEffect(() => {
-    localStorage.setItem('excludeList', JSON.stringify(excludeList));
-  }, [excludeList]);
+    const saveData = async () => {
+      if (user && watchList.length > 0) {
+        try {
+          await setDoc(doc(db, "users", user.uid), {
+            watchList,
+            excludeList
+          }, { merge: true });
+        } catch (error) {
+          console.error("データ保存エラー:", error);
+        }
+      }
+    };
+    saveData();
+  }, [watchList, excludeList, user]);
 
   const fetchStocks = async () => {
     if (watchList.length === 0) return;
@@ -108,7 +137,8 @@ export default function Home() {
       {user ? (
         <div className="flex flex-col min-h-screen">
           <header className="bg-white shadow-sm px-6 py-4 flex justify-between items-center border-b border-slate-200">
-            <h1 className="text-xl font-bold text-slate-800">日本株投資サポート</h1>
+            {/* タイトルを変更 */}
+            <h1 className="text-xl font-bold text-slate-800">経済情報ダッシュボード</h1>
             <div className="flex items-center gap-4">
               <span className="text-xs text-slate-400">更新: {lastUpdated || '---'}</span>
               <button onClick={fetchStocks} disabled={isLoadingStocks} className="bg-slate-100 hover:bg-slate-200 p-2 rounded-full transition-colors">
@@ -227,7 +257,8 @@ export default function Home() {
       ) : (
         <div className="min-h-screen flex items-center justify-center p-4">
           <div className="bg-white p-10 max-w-md w-full rounded-2xl shadow-xl text-center">
-            <h2 className="text-2xl font-bold text-slate-800 mb-8">投資サポート</h2>
+            {/* 未ログイン時のタイトルも変更 */}
+            <h2 className="text-2xl font-bold text-slate-800 mb-8">経済情報ダッシュボード</h2>
             <button onClick={() => signInWithPopup(auth, provider)} className="w-full bg-blue-600 text-white px-6 py-3.5 rounded-xl font-bold flex items-center justify-center gap-3">
               Googleでログイン
             </button>
