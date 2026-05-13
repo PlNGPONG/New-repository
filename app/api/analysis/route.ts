@@ -12,7 +12,6 @@ export async function POST(request: Request) {
     
     const isDeepMode = mode === 'deep';
     
-    // ① モデルをご指定の「gemini-3-flash-preview」に変更
     const model = genAI.getGenerativeModel({ 
       model: "gemini-3-flash-preview",
       tools: isDeepMode ? [{ googleSearch: {} }] as any : undefined
@@ -21,7 +20,6 @@ export async function POST(request: Request) {
     const stockInfo = stocks.map((s: any) => `${s.name}(${s.ticker}): ${s.price}円 (${s.changePercent?.toFixed(2)}%)`).join(', ');
     const excludeInfo = excludeList && excludeList.length > 0 ? excludeList.join(', ') : 'なし';
 
-    // ②③ 分析の深さと具体性を強制するプロンプトの大幅改修
     const prompt = `
       # 指示
       あなたは超一流の短期トレードアナリストです。
@@ -29,9 +27,9 @@ export async function POST(request: Request) {
       出力文章の中にアスタリスク記号による強調は絶対に使用しないでください。見出しや強調には「」や【】を利用してください。
 
       # 分析の必須条件（極めて重要）
-      1. 【具体性の徹底】「地政学リスクの高まり」「インフレ懸念」といった曖昧な表現は禁止します。必ず「いつ」「誰が」「何を」した報道（例：〇月〇日の〇〇通信の報道における〇〇発言、昨晩発表の米CPIの具体的な数値など）を織り込んでいるのか、情報の鮮度と具体明細を明記してください。情勢変化の前提を明確にするためです。
-      2. 【カタリストの意識】数日～2週間のリターンを最大化するため、直近2週間以内に控える重要イベント（決算発表、米雇用統計、日銀・FRB会合など）の日程を必ず意識し、それに向けた資金動向を分析に組み込んでください。
-      3. ウォッチリスト外の銘柄も積極的に発注案に含めること。
+      1. 【具体性の徹底】「地政学リスク」「インフレ懸念」といった曖昧な表現は禁止。必ず「いつ」「誰が」「何を」した報道（例：〇月〇日の〇〇通信の報道、昨晩発表の米CPIの具体的な数値など）を織り込んでいるのか、情報源と数値を明記すること。
+      2. 【カタリストの意識】数日～2週間のリターンを最大化するため、直近2週間以内に控える重要イベント（決算発表、米雇用統計、日銀・FRB会合など）の日程を必ず意識し、資金動向を分析に組み込むこと。
+      3. 【絶対探索ルール】ウォッチリストの銘柄がすべて「低」適性になるような悪い地合いであっても、他セクター、ディフェンシブ株、あるいは個別材料株を市場全体から広く検索し、必ず「買い適性：高」または「中」となる銘柄を最低1～2銘柄発掘して発注案に提示せよ。「買える銘柄がない」という逃げの姿勢はプロとして禁止する。
       4. 銘柄を記載する際は必ず「銘柄名（4桁コード）」の形式にすること。
 
       # 投資前提
@@ -49,7 +47,7 @@ export async function POST(request: Request) {
 
       # 出力フォーマット
       ## 1. サマリー
-      （100字以内の切れ味鋭い総評。ここでも曖昧さを排除し、中核となる具体的な事象を記載すること）
+      （100字以内の切れ味鋭い総評。中核となる具体的な事象を記載）
 
       ## 2. 発注案
       | 銘柄名(コード) | 買い適性 | エントリーゾーン | 予定ロット(数量/金額) | ターゲット | ロスカット | 想定リスク | R/R | コメント |
@@ -62,7 +60,7 @@ export async function POST(request: Request) {
 
       ## 4. 銘柄入替提案
       【除外・様子見】（銘柄名・コード・具体的な理由）
-      【新規追加候補】（銘柄名・コード・具体的な理由。環境に合致する多様な銘柄を提示せよ）
+      【新規追加候補】（銘柄名・コード・具体的な理由。環境に合致する「高」「中」適性の銘柄を提示せよ）
 
       回答の最後に必ず以下のJSONを出力してください。
       \`\`\`json
@@ -74,8 +72,7 @@ export async function POST(request: Request) {
     const text = result.response.text();
 
     let newTickers = [];
-    const jsonMatch = text.match(/```json\s*([\s\S]*?)\s*
-```/);
+    const jsonMatch = text.match(/```json\s*([\s\S]*?)\s*```/);
     if (jsonMatch && jsonMatch[1]) {
       try {
         const parsed = JSON.parse(jsonMatch[1]);

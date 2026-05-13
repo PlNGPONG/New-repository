@@ -20,8 +20,10 @@ export async function POST(request: Request) {
 
     const kpiSymbols = [
       { ticker: 'N225', name: '日経平均株価', y_ticker: '^N225' },
-      { ticker: 'NI225', name: '日経平均先物', y_ticker: 'NK=F' }, // 先物はNK=Fがより確実
-      { ticker: 'TOPIX', name: 'TOPIX', y_ticker: '^TPX' },
+      // ドル建てから円建て先物（NIY=F）に変更
+      { ticker: 'NI225', name: '日経平均先物', y_ticker: 'NIY=F' }, 
+      // ^TPXのバグ回避のため、TOPIX連動ETF（1306.T）で代用
+      { ticker: 'TOPIX', name: 'TOPIX(ETF)', y_ticker: '1306.T' }, 
       { ticker: 'USDJPY', name: '米ドル/円', y_ticker: 'JPY=X' },
       { ticker: 'SOX', name: 'SOX指数', y_ticker: '^SOX' }
     ];
