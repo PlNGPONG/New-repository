@@ -63,34 +63,35 @@ export async function POST(request: Request) {
       【除外・様子見】（銘柄名・コード・具体的な理由）
       【新規追加候補】（銘柄名・コード・具体的な理由。採用強化や開示情報など裏付けのある「高」「中」適性の銘柄を提示せよ）
 
-      回答の最後に必ず以下のJSONを出力してください。
-      \`\`\`json
-      { "new_tickers": ["XXXX", "YYYY"] }
-      \`\`\`
+      回答の最後に必ずJSONブロックを出力してください。
     `;
 
     const result = await model.generateContent(prompt);
     const text = result.response.text();
 
-    let newTickers = [];
-    
-    // エラーの原因だった正規表現を、安全なRegExpオブジェクトでの生成に変更
-    const extractRegex = new RegExp("```json\\s*([\\s\\S]*?)\\s*```");
-    const jsonMatch = text.match(extractRegex);
-    
-    if (jsonMatch && jsonMatch[1]) {
-      try {
-        const parsed = JSON.parse(jsonMatch[1]);
-        if (parsed.new_tickers) newTickers = parsed.new_tickers;
-      } catch (e) {}
+    let newTickers: string[] = [];
+    let cleanText = text;
+
+    // 正規表現エラーを回避するため、文字列検索によるJSON抽出
+    const jsonMarker = "```json";
+    const startIndex = text.indexOf(jsonMarker);
+    if (startIndex !== -1) {
+      const jsonContent = text.substring(startIndex + jsonMarker.length);
+      const endIndex = jsonContent.indexOf("```");
+      if (endIndex !== -1) {
+        try {
+          const jsonString = jsonContent.substring(0, endIndex).trim();
+          const parsed = JSON.parse(jsonString);
+          if (parsed.new_tickers) newTickers = parsed.new_tickers;
+          // 表示用テキストからJSON部分を削除
+          cleanText = text.substring(0, startIndex) + text.substring(startIndex + jsonMarker.length + endIndex + 3);
+        } catch (e) {
+          console.error("JSON Parse Error");
+        }
+      }
     }
 
-    // 表示用テキストのクリーンアップ部分も同様に変更
-    const replaceRegex = new RegExp("```json\\s*[\\s\\S]*?\\s*
-```");
-    const cleanText = text.replace(replaceRegex, '').trim();
-    
-    return NextResponse.json({ success: true, analysis: cleanText, newTickers });
+    return NextResponse.json({ success: true, analysis: cleanText.trim(), newTickers });
   } catch (error) {
     console.error("Analysis Error:", error);
     return NextResponse.json({ success: false, error: '分析エラー' });
