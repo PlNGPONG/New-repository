@@ -73,8 +73,11 @@ export async function POST(request: Request) {
     const text = result.response.text();
 
     let newTickers = [];
-    const jsonMatch = text.match(/```json\s*([\s\S]*?)\s*
-```/);
+    
+    // エラーの原因だった正規表現を、安全なRegExpオブジェクトでの生成に変更
+    const extractRegex = new RegExp("```json\\s*([\\s\\S]*?)\\s*```");
+    const jsonMatch = text.match(extractRegex);
+    
     if (jsonMatch && jsonMatch[1]) {
       try {
         const parsed = JSON.parse(jsonMatch[1]);
@@ -82,7 +85,11 @@ export async function POST(request: Request) {
       } catch (e) {}
     }
 
-    const cleanText = text.replace(/```json\s*[\s\S]*?\s*```/, '').trim();
+    // 表示用テキストのクリーンアップ部分も同様に変更
+    const replaceRegex = new RegExp("```json\\s*[\\s\\S]*?\\s*
+```");
+    const cleanText = text.replace(replaceRegex, '').trim();
+    
     return NextResponse.json({ success: true, analysis: cleanText, newTickers });
   } catch (error) {
     console.error("Analysis Error:", error);
