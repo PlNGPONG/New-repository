@@ -31,10 +31,9 @@ export default function Home() {
   const [isLoadingAnalysis, setIsLoadingAnalysis] = useState(false);
   const [analysisError, setAnalysisError] = useState<string>("");
   const [lastUpdated, setLastUpdated] = useState<string>("");
-  
-  // ①と②の根本解決のため、ユーザーデータの初期読込状態を厳密に管理するステートを追加
   const [isUserDataLoading, setIsUserDataLoading] = useState(true);
 
+  // ログイン状態の監視と、Firestoreからの初回データ読込
   useEffect(() => {
     const unsubscribe = auth.onAuthStateChanged(async (currentUser) => {
       setUser(currentUser);
@@ -48,13 +47,15 @@ export default function Home() {
             setWatchList(data.watchList || ['8035', '6857', '6594', '8306']);
             setExcludeList(data.excludeList || []);
           } else {
-            setWatchList(['8035', '6857', '6594', '8306']);
+            // 初めて利用するユーザー用のデフォルト配置
+            const defaultWatch = ['8035', '6857', '6594', '8306'];
+            setWatchList(defaultWatch);
             setExcludeList([]);
+            await setDoc(docRef, { watchList: defaultWatch, excludeList: [] }, { merge: true });
           }
         } catch (error) {
-          console.error("データ取得エラー:", error);
+          console.error("データベースからの読込に失敗しました:", error);
           setWatchList(['8035', '6857', '6594', '8306']);
-          setExcludeList([]);
         } finally {
           setIsUserDataLoading(false);
         }
@@ -67,32 +68,18 @@ export default function Home() {
     return () => unsubscribe();
   }, []);
 
-  // ② データの一意な白紙リセットバグを防ぐガードを追加した保存処理
-  useEffect(() => {
-    const saveData = async () => {
-      // データベースからの初期反転ロードが完全に完了するまでは自動保存（白紙上書き）を絶対に走らせない
-      if (!isUserDataLoading && user) {
-        try {
-          await setDoc(doc(db, "users", user.uid), {
-            watchList,
-            excludeList
-          }, { merge: true });
-        } catch (error) {
-          console.error("データ保存エラー:", error);
-        }
-      }
-    };
-    saveData();
-  }, [watchList, excludeList, user, isUserDataLoading]);
-
-  const fetchStocks = async () => {
-    if (watchList.length === 0) return;
+  // 株価データをAPIから取得する関数
+  const fetchStocksData = async (currentList: string[]) => {
+    if (currentList.length === 0) {
+      setStocks([]);
+      return;
+    }
     setIsLoadingStocks(true);
     try {
       const response = await fetch('/api/stocks', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ symbols: watchList }),
+        body: JSON.stringify({ symbols: currentList }),
       });
       const result = await response.json();
       if (result.success) {
@@ -100,21 +87,89 @@ export default function Home() {
         setLastUpdated(new Date().toLocaleTimeString());
       }
     } catch (error) {
-      console.error("取得失敗:", error);
+      console.error("株価のリアルタイム取得に失敗しました:", error);
     } finally {
       setIsLoadingStocks(false);
     }
   };
 
+  // ウォッチリストの数が確定、またはデータロード完了時に株価を取得
   useEffect(() => {
     if (user && watchList.length > 0 && !isUserDataLoading) {
-      fetchStocks();
+      fetchStocksData(watchList);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, watchList.length, isUserDataLoading]);
 
+  // 【改良】銘柄を個別に追加する関数（Firestoreへ直書き）
+  const handleAddTicker = async () => {
+    if (!newTickerInput || !user) return;
+    const code = newTickerInput.trim();
+    if (watchList.includes(code)) return;
+
+    const updatedList = [...watchList, code];
+    setWatchList(updatedList);
+    setNewTickerInput("");
+
+    try {
+      await setDoc(doc(db, "users", user.uid), { watchList: updatedList }, { merge: true });
+      console.log("Firestoreへの銘柄追加保存が成功しました:", code);
+    } catch (error) {
+      console.error("Firestoreへの追加保存に失敗しました:", error);
+    }
+  };
+
+  // 【改良】銘柄を個別に削除する関数（Firestoreへ直書き）
+  const handleRemoveTicker = async (ticker: string) => {
+    if (!user) return;
+    const updatedList = watchList.filter(t => t !== ticker);
+    setWatchList(updatedList);
+
+    try {
+      await setDoc(doc(db, "users", user.uid), { watchList: updatedList }, { merge: true });
+      console.log("Firestoreからの銘柄削除保存が成功しました:", ticker);
+      // 画面側の株価表示リストも即座に同期させる
+      setStocks(prev => prev.filter(s => s.ticker !== ticker));
+    } catch (error) {
+      console.error("Firestoreからの削除保存に失敗しました:", error);
+    }
+  };
+
+  // 【改良】除外リストへ追加する関数（Firestoreへ直書き）
+  const handleAddExclude = async () => {
+    if (!newExcludeInput || !user) return;
+    const code = newExcludeInput.trim();
+    if (excludeList.includes(code)) return;
+
+    const updatedList = [...excludeList, code];
+    setExcludeList(updatedList);
+    setNewExcludeInput("");
+
+    try {
+      await setDoc(doc(db, "users", user.uid), { excludeList: updatedList }, { merge: true });
+      console.log("Firestoreへの除外リスト追加が成功しました:", code);
+    } catch (error) {
+      console.error("Firestoreへの除外追加に失敗しました:", error);
+    }
+  };
+
+  // 【改良】除外リストから削除する関数（Firestoreへ直書き）
+  const handleRemoveExclude = async (ticker: string) => {
+    if (!user) return;
+    const updatedList = excludeList.filter(x => x !== ticker);
+    setExcludeList(updatedList);
+
+    try {
+      await setDoc(doc(db, "users", user.uid), { excludeList: updatedList }, { merge: true });
+      console.log("Firestoreからの除外リスト削除が成功しました:", ticker);
+    } catch (error) {
+      console.error("Firestoreからの除外削除に失敗しました:", error);
+    }
+  };
+
+  // AI分析を実行する関数
   const handleAnalysis = async (mode: 'deep' | 'quick') => {
-    if (stocks.length === 0) return;
+    if (stocks.length === 0 || !user) return;
     setIsLoadingAnalysis(true);
     setAnalysisError("");
     try {
@@ -126,14 +181,17 @@ export default function Home() {
       const result = await response.json();
       if (result.success) {
         setAnalysis(result.analysis);
+        // AIが新しい銘柄を提案してきた場合、それらも合流させてFirestoreへ直書き保存
         if (result.newTickers?.length > 0) {
-          setWatchList(prev => [...new Set([...prev, ...result.newTickers])]);
+          const combinedList = [...new Set([...watchList, ...result.newTickers])];
+          setWatchList(combinedList);
+          await setDoc(doc(db, "users", user.uid), { watchList: combinedList }, { merge: true });
         }
       } else {
-        setAnalysisError(result.error || "分析失敗");
+        setAnalysisError(result.error || "分析失敗いたしました");
       }
     } catch (error) {
-      setAnalysisError("通信失敗");
+      setAnalysisError("通信に失敗いたしました");
     } finally {
       setIsLoadingAnalysis(false);
     }
@@ -145,8 +203,7 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-slate-100 pb-10">
       {user ? (
-        // ① ログイン後、データの整合性が整うまでの明確なローディング待機画面
-        isUserDataLoading || (stocks.length === 0 && isLoadingStocks) ? (
+        isUserDataLoading || (watchList.length > 0 && stocks.length === 0 && isLoadingStocks) ? (
           <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 text-slate-600">
             <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600 mb-4"></div>
             <p className="text-sm font-bold tracking-wider">クラウドから専用データを安全に読み込み中...</p>
@@ -158,7 +215,7 @@ export default function Home() {
               <h1 className="text-xl font-bold text-slate-800">経済情報ダッシュボード</h1>
               <div className="flex items-center gap-4">
                 <span className="text-xs text-slate-400">更新: {lastUpdated || '---'}</span>
-                <button onClick={fetchStocks} disabled={isLoadingStocks} className="bg-slate-100 hover:bg-slate-200 p-2 rounded-full transition-colors">
+                <button onClick={() => fetchStocksData(watchList)} disabled={isLoadingStocks} className="bg-slate-100 hover:bg-slate-200 p-2 rounded-full transition-colors">
                   <svg className={`w-4 h-4 text-slate-600 ${isLoadingStocks ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h5M20 20v-5h-5M2.1 12a9 9 0 0115.1-6.9L20 9m-8 11a9 9 0 01-7.1-3.1L4 15"></path></svg>
                 </button>
                 <button onClick={() => signOut(auth)} className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-1.5 rounded-md">ログアウト</button>
@@ -186,12 +243,12 @@ export default function Home() {
                   <h3 className="text-sm font-bold text-slate-700 mb-2">除外リスト（買い推奨制限）</h3>
                   <div className="flex gap-2 mb-3">
                     <input type="text" placeholder="コード" value={newExcludeInput} onChange={e => setNewExcludeInput(e.target.value)} className="border border-slate-300 px-3 py-1.5 text-sm rounded-md flex-1"/>
-                    <button onClick={() => { if(newExcludeInput) { setExcludeList([...excludeList, newExcludeInput]); setNewExcludeInput(""); } }} className="bg-slate-200 px-4 py-1.5 text-sm rounded-md">追加</button>
+                    <button onClick={handleAddExclude} className="bg-slate-200 px-4 py-1.5 text-sm rounded-md">追加</button>
                   </div>
                   <div className="flex flex-wrap gap-2">
                     {excludeList.map(t => (
                       <span key={t} className="bg-red-50 text-red-600 border border-red-200 text-xs px-2 py-1 rounded-md flex items-center gap-1">
-                        {t} <button onClick={() => setExcludeList(prev => prev.filter(x => x !== t))}>×</button>
+                        {t} <button onClick={() => handleRemoveExclude(t)}>×</button>
                       </span>
                     ))}
                   </div>
@@ -208,7 +265,7 @@ export default function Home() {
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-slate-100 flex flex-col overflow-hidden">
                   <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
-                    <h2 className="text-base font-bold text-slate-800">本日のシナシナリオ分析</h2>
+                    <h2 className="text-base font-bold text-slate-800">本日のシナリオ分析</h2>
                     <div className="flex gap-2">
                       <button onClick={() => handleAnalysis('quick')} disabled={isLoadingAnalysis} className="text-xs font-bold bg-amber-100 text-amber-800 px-3 py-1.5 rounded-md">クイック</button>
                       <button onClick={() => handleAnalysis('deep')} disabled={isLoadingAnalysis} className="text-xs font-bold bg-blue-600 text-white px-3 py-1.5 rounded-md">じっくり</button>
@@ -242,7 +299,7 @@ export default function Home() {
                   </div>
                   <div className="px-4 py-3 border-b flex gap-2 bg-white">
                     <input type="text" placeholder="コード" value={newTickerInput} onChange={e => setNewTickerInput(e.target.value)} className="border px-3 py-1 text-sm rounded-md flex-1"/>
-                    <button onClick={() => { if(newTickerInput) { setWatchList([...watchList, newTickerInput]); setNewTickerInput(""); } }} className="bg-emerald-50 text-emerald-700 px-3 py-1 text-sm rounded-md font-bold">追加</button>
+                    <button onClick={handleAddTicker} className="bg-emerald-50 text-emerald-700 px-3 py-1 text-sm rounded-md font-bold">追加</button>
                   </div>
                   <div className="overflow-auto max-h-[600px]">
                     <ul className="divide-y">
@@ -259,7 +316,7 @@ export default function Home() {
                                 {(s.change ?? 0) > 0 ? '+' : ''}{s.changePercent?.toFixed(2)}%
                               </span>
                             </div>
-                            <button onClick={() => setWatchList(prev => prev.filter(t => t !== s.ticker))} className="text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100">
+                            <button onClick={() => handleRemoveTicker(s.ticker)} className="text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100">
                               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
                             </button>
                           </div>
