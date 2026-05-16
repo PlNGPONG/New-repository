@@ -1,9 +1,9 @@
 // app/api/analysis/route.ts
 import { NextResponse } from 'next/server';
-import { GoogleGenerativeAI, SchemaType } from "@google/generative-ai";
+import { GoogleGenerativeAI, SchemaType, Schema } from "@google/generative-ai";
 
-// 1. JSON Schemaの厳密な定義（型の強制）
-const responseSchema = {
+// 1. JSON Schemaの厳密な定義（Schema型を明示してTypeScriptエラーを回避）
+const responseSchema: Schema = {
   type: SchemaType.OBJECT,
   properties: {
     summary: { type: SchemaType.STRING },
@@ -118,7 +118,7 @@ function validateOrder(order: any, evidenceList: any[], excludeList: string[] = 
   return warnings;
 }
 
-// 3. JSONをMarkdownに変換（アスタリスク不使用、表現の適正化）
+// 3. JSONをMarkdownに変換
 function jsonToMarkdown(data: any) {
   let md = `## 1. サマリー\n${data.summary}\n\n`;
   
