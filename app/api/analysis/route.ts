@@ -1,6 +1,7 @@
 // app/api/analysis/route.ts
 import { NextResponse } from 'next/server';
-import { GoogleGenerativeAI, SchemaType, Schema } from "@google/generative-ai";
+import { GoogleGenerativeAI, SchemaType } from "@google/generative-ai";
+import type { Schema } from "@google/generative-ai"; // 型インポートの分離
 
 // ユーティリティ関数
 function normalizeTicker(ticker: string) {
@@ -13,7 +14,7 @@ function escCell(value: any) {
     .replace(/\n/g, " ");
 }
 
-// 1. JSON Schemaの厳密な定義（数値検証用のフィールドを追加）
+// 1. JSON Schemaの厳密な定義
 const responseSchema: Schema = {
   type: SchemaType.OBJECT,
   properties: {
@@ -97,7 +98,6 @@ function validateWatchlistReview(parsedData: any, stocks: any[]) {
   const warnings: string[] = [];
   const reviews = parsedData.report?.watchlistReview ?? [];
   const reviewed = new Set(reviews.map((r: any) => normalizeTicker(r.ticker)));
-
   const kpiKeywords = ["N225", "NI225", "TOPIX", "USDJPY", "SOX", "^", "=F", "=X", "1306"];
 
   stocks.forEach((s: any) => {
@@ -113,14 +113,17 @@ function validateWatchlistReview(parsedData: any, stocks: any[]) {
   return warnings;
 }
 
-function validateOrder(order: any, evidenceList: any[], stockMap: Map<string, any>, excludeList: string[] = []) {
+function validateOrder(order: any, evidenceList: any[], stockMap: Map<string, any>, excludeList: string[] = [], newTickers: string[] = []) {
   const warnings: string[] = [];
   const ticker = normalizeTicker(order.ticker);
   const ev = evidenceList.find((e: any) => normalizeTicker(e.ticker) === ticker);
   const stock = stockMap.get(ticker);
+  
+  // 新規候補銘柄の許可ロジック
+  const isNewCandidate = newTickers.some((t) => normalizeTicker(t) === ticker);
 
-  if (!stock) {
-    warnings.push(`${order.ticker}: 入力された市場データに存在しない銘柄です。`);
+  if (!stock && !isNewCandidate) {
+    warnings.push(`${order.ticker}: 入力市場データにも新規候補(newTickers)にも存在しない銘柄です。`);
     return warnings;
   }
   if (!ev) {
@@ -144,10 +147,10 @@ function validateOrder(order: any, evidenceList: any[], stockMap: Map<string, an
     )
   );
   if (excluded) {
-    warnings.push(`${order.ticker}: 除外リストに含まれている銘柄です。`);
+    warnings.push(`${order.ticker}: 除外リストに含まれている銘柄です。発注案に入れてはいけません。`);
   }
 
-  // 出典URLチェック
+  // 出典URLのチェック
   if (ev?.ptsPrice && !ev.ptsSourceUrl) {
     warnings.push(`${order.ticker}: PTS価格があるのに出典URLがありません。`);
   }
@@ -155,10 +158,18 @@ function validateOrder(order: any, evidenceList: any[], stockMap: Map<string, an
     warnings.push(`${order.ticker}: ADR価格の換算条件または出典URLが不足しています。`);
   }
 
-  // AIではなく「アプリから渡された基準価格」を使った乖離チェック
-  const basePrice = stock.referencePrice;
-  const postMarketPrice = ev?.ptsPrice ?? ev?.adrJpyPrice ?? null;
+  // 基準価格の決定（新規候補銘柄の場合はev.closePriceを使用）
+  const basePrice = (stock?.referencePrice != null && Number.isFinite(stock.referencePrice))
+    ? stock.referencePrice
+    : (ev?.closePrice != null && Number.isFinite(ev.closePrice))
+      ? ev.closePrice
+      : null;
 
+  if (basePrice == null) {
+    warnings.push(`${order.ticker}: 基準となる価格(前日終値など)が取得できません。`);
+  }
+
+  const postMarketPrice = ev?.ptsPrice ?? ev?.adrJpyPrice ?? null;
   if (postMarketPrice && basePrice) {
     const gapRate = (postMarketPrice - basePrice) / basePrice;
     if (Math.abs(gapRate) >= 0.05 && order.entryType === "fixed") {
@@ -168,8 +179,8 @@ function validateOrder(order: any, evidenceList: any[], stockMap: Map<string, an
     }
   }
 
-  // R/Rの再計算チェック
-  if (order.entryType === "fixed" && order.entryLow && order.entryHigh && order.targetLow && order.stopLossPrice) {
+  // R/Rの再計算チェック (null明示判定に変更)
+  if (order.entryType === "fixed" && order.entryLow != null && order.entryHigh != null && order.targetLow != null && order.stopLossPrice != null) {
     const entry = (order.entryLow + order.entryHigh) / 2;
     const risk = entry - order.stopLossPrice;
     const reward = order.targetLow - entry;
@@ -182,7 +193,7 @@ function validateOrder(order: any, evidenceList: any[], stockMap: Map<string, an
     }
     if (risk > 0 && reward > 0) {
       const calculatedRr = reward / risk;
-      if (order.rr !== null && Math.abs(order.rr - calculatedRr) > 0.3) {
+      if (order.rr != null && Math.abs(order.rr - calculatedRr) > 0.3) {
         warnings.push(`${order.ticker}: R/Rの計算が不整合です。計算値(${calculatedRr.toFixed(2)})と出力値(${order.rr})が乖離しています。`);
       }
     }
@@ -195,15 +206,15 @@ function validateOrder(order: any, evidenceList: any[], stockMap: Map<string, an
   if (order.riskYen && order.riskYen > 320000) {
     warnings.push(`${order.ticker}: 1銘柄の想定リスクが資金1600万円の2%（32万円）を超えています。`);
   }
-  if (order.buyRating === "高" && order.rr !== null && order.rr < 1.5) {
+  if (order.buyRating === "高" && order.rr != null && order.rr < 1.5) {
     warnings.push(`${order.ticker}: リスクリワード（R/R）が1.5未満なのに買い適性が「高」に設定されています。`);
   }
 
   return warnings;
 }
 
-// 3. JSONをMarkdownに変換（エスケープ処理実装）
-function jsonToMarkdown(data: any) {
+// 3. JSONをMarkdownに変換（残存したレポート警告も画面下部に表示）
+function jsonToMarkdown(data: any, reportWarnings: string[] = []) {
   let md = `## 1. サマリー\n${data.summary}\n\n`;
   
   md += `## 2. 発注案\n`;
@@ -234,6 +245,11 @@ function jsonToMarkdown(data: any) {
     md += `- 【${e.ticker}】: PTS[${ptsInfo}], ADR円換算[${adrInfo}]\n`;
   });
 
+  if (reportWarnings.length > 0) {
+    md += `\n> ⚠️ 警告（レポート体裁）\n`;
+    reportWarnings.forEach(w => md += `> - ${w}\n`);
+  }
+
   return md;
 }
 
@@ -246,9 +262,17 @@ export async function POST(request: Request) {
     const genAI = new GoogleGenerativeAI(apiKey);
     const isDeepMode = mode === 'deep';
     
+    // Lightモードの場合はバリデーションを通過できないため処理をブロック
+    if (!isDeepMode) {
+      return NextResponse.json({
+        success: false,
+        error: "PTS・ADR・決算確認を含む詳細な分析には「じっくりモード（deep）」が必要です。"
+      });
+    }
+
     const model = genAI.getGenerativeModel({ 
       model: "gemini-3.1-pro-preview",
-      tools: isDeepMode ? [{ googleSearch: {} }] as any : undefined,
+      tools: [{ googleSearch: {} }],
       generationConfig: {
         responseMimeType: "application/json",
         responseSchema: responseSchema,
@@ -256,18 +280,21 @@ export async function POST(request: Request) {
     });
 
     const stockMap = new Map(
-      stocks.map((s: any) => [
-        normalizeTicker(s.ticker),
-        {
-          name: s.name,
-          referencePrice: Number(s.price),
-          changePercent: s.changePercent,
-        },
-      ])
+      stocks.map((s: any) => {
+        const p = Number(s.price);
+        return [
+          normalizeTicker(s.ticker),
+          {
+            name: s.name,
+            referencePrice: Number.isFinite(p) ? p : null,
+            changePercent: s.changePercent,
+          },
+        ];
+      })
     );
 
     const stockInfo = stocks.map((s: any) => {
-      const changeStr = s.changePercent !== null && s.changePercent !== undefined 
+      const changeStr = s.changePercent != null 
         ? ` (前日比: ${s.changePercent > 0 ? '+' : ''}${s.changePercent.toFixed(2)}%)` 
         : '';
       return `${s.name}(${s.ticker}): 基準価格 ${s.price}円${changeStr}`;
@@ -276,30 +303,15 @@ export async function POST(request: Request) {
     const excludeInfo = excludeList && excludeList.length > 0 ? excludeList.join(', ') : 'なし';
     const safeReferenceText = referenceText || "なし";
 
-    // モード別のプロンプト設計
-    const deepPrompt = `
+    const basePrompt = `
       あなたは短期トレード用の発注レポートを作成するAIです。
       Web検索を駆使して事実を集め、出力してください。
 
       【重要ルール】
       1. Web検索を行い、PTS価格やADR価格の事実を evidence に収集せよ。確認できない場合は絶対に推測せず null とすること。
       2. 決算発表等によりPTS/ADRが基準価格から大きく乖離（5%以上）している場合、エントリーゾーンは「固定価格（fixed）」ではなく「条件型戦術（conditional）」（例：寄り後VWAP回復確認など）とせよ。
-    `;
-
-    const lightPrompt = `
-      あなたは短期トレード用の発注レポートを作成するAIです。
-      今回は簡易モード（Web検索無効）のため、PTS・ADR・最新の決算数値はすべて null とすること。
-      買い適性は原則「低」または「見送り（avoid）」とし、入力済みの価格・騰落率だけを使った暫定コメントに限定すること。
-    `;
-
-    const basePrompt = `
-      ${isDeepMode ? deepPrompt : lightPrompt}
-
-      【休日の戦略的思考（Weekend Mode）】
-      本日が休場日であっても「今日は動意がないから」という理由だけで分析を終了してはならない。ただし、材料・需給・R/Rが不十分な場合は、翌営業日の戦術として無理に買い候補を作らず「見送り」「現金待機」を推奨してよい。
-
-      【ウォッチリストの全件レビュー】
-      インプットデータの全銘柄（KPI除く）について "watchlistReview" で1銘柄ずつ現状評価と翌営業日のスタンスを記述せよ。
+      3. 本日が休場日であっても「今日は動意がないから」という理由だけで分析を終了してはならない。ただし、材料・需給・R/Rが不十分な場合は、翌営業日の戦術として無理に買い候補を作らず「見送り」「現金待機」を推奨してよい。
+      4. インプットデータの全銘柄（KPI除く）について "watchlistReview" で1銘柄ずつ現状評価と翌営業日のスタンスを記述せよ。
 
       【禁止事項】
       - 証拠のない数字の捏造。
@@ -314,13 +326,15 @@ export async function POST(request: Request) {
     `;
 
     let parsedData: any = null;
-    let finalWarnings: string[] = [];
+    let orderWarnings: string[] = [];
+    let reportWarnings: string[] = [];
+    let allWarnings: string[] = [];
 
     // 自己修復ループ（最大2回）
     for (let attempt = 0; attempt < 2; attempt++) {
       const currentPrompt = attempt === 0 
         ? basePrompt 
-        : `以下の発注案にはシステム検証エラーがあります。エラーを全て解消して、再度JSONを出力してください。固定価格が否定された場合は条件付き戦術（conditional）に変更してください。\n\n検証エラー:\n${finalWarnings.join('\n')}\n\n前回出力:\n${JSON.stringify(parsedData)}`;
+        : `以下の発注案にはシステム検証エラーがあります。エラーを全て解消して、再度JSONを出力してください。固定価格が否定された場合は条件付き戦術（conditional）に変更してください。\n\n検証エラー:\n${allWarnings.join('\n')}\n\n前回出力:\n${JSON.stringify(parsedData)}`;
 
       const result = await model.generateContent(currentPrompt);
       const responseText = result.response.text();
@@ -331,31 +345,32 @@ export async function POST(request: Request) {
         throw new Error("JSONのパースに失敗しました");
       }
 
-      finalWarnings = [];
+      orderWarnings = [];
+      const currentNewTickers = parsedData.newTickers || [];
       parsedData.orders.forEach((order: any) => {
-        const warnings = validateOrder(order, parsedData.evidence, stockMap, excludeList || []);
-        finalWarnings = finalWarnings.concat(warnings);
+        const warnings = validateOrder(order, parsedData.evidence, stockMap, excludeList || [], currentNewTickers);
+        orderWarnings = orderWarnings.concat(warnings);
       });
       
-      // 全件レビューの抜け漏れチェックを追加
-      finalWarnings = finalWarnings.concat(validateWatchlistReview(parsedData, stocks));
+      reportWarnings = validateWatchlistReview(parsedData, stocks);
+      allWarnings = orderWarnings.concat(reportWarnings);
 
-      if (finalWarnings.length === 0) break;
-      console.log(`Validation attempt ${attempt + 1} failed:`, finalWarnings);
+      if (allWarnings.length === 0) break;
+      console.log(`Validation attempt ${attempt + 1} failed:`, allWarnings);
     }
 
-    // 修復後にもエラーが残っていた場合の強制フォールバック処理
-    if (finalWarnings.length > 0) {
+    // 発注案エラー（致命傷）のみ強制フォールバック
+    if (orderWarnings.length > 0) {
       parsedData.orders = parsedData.orders.map((o: any) => ({
         ...o,
         buyRating: "見送り",
         entryType: "avoid",
-        entryPlan: "システム検証エラーが残存したため強制見送り",
-        scenarioComment: `【警告】検証エラーが解消されませんでした: ${finalWarnings.join(" / ")}`
+        entryPlan: "発注案のシステム検証エラーが残存したため強制見送り",
+        scenarioComment: `【警告】${orderWarnings.join(" / ")}`
       }));
     }
 
-    const finalMarkdown = jsonToMarkdown(parsedData);
+    const finalMarkdown = jsonToMarkdown(parsedData, reportWarnings);
 
     return NextResponse.json({ 
       success: true, 
