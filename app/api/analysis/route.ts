@@ -2,7 +2,7 @@
 import { NextResponse } from 'next/server';
 import { GoogleGenerativeAI, SchemaType, Schema } from "@google/generative-ai";
 
-// 1. JSON Schemaの厳密な定義（Schema型を明示してTypeScriptエラーを回避）
+// 1. JSON Schemaの厳密な定義
 const responseSchema: Schema = {
   type: SchemaType.OBJECT,
   properties: {
@@ -57,9 +57,22 @@ const responseSchema: Schema = {
       type: SchemaType.OBJECT,
       properties: {
         macro: { type: SchemaType.STRING },
+        // ウォッチリスト全件レビュー用に追加
+        watchlistReview: { 
+          type: SchemaType.ARRAY, 
+          items: {
+            type: SchemaType.OBJECT,
+            properties: {
+              ticker: { type: SchemaType.STRING },
+              name: { type: SchemaType.STRING },
+              comment: { type: SchemaType.STRING }
+            },
+            required: ["ticker", "name", "comment"]
+          }
+        },
         micro: { type: SchemaType.STRING },
       },
-      required: ["macro", "micro"],
+      required: ["macro", "watchlistReview", "micro"],
     },
     newTickers: { type: SchemaType.ARRAY, items: { type: SchemaType.STRING } },
   },
@@ -93,7 +106,7 @@ function validateOrder(order: any, evidenceList: any[], excludeList: string[] = 
     warnings.push(`${order.ticker}: ADR価格の換算条件または出典URLが不足しています。`);
   }
 
-  // 乖離率と固定指値の矛盾チェック（神田ロジック）
+  // 乖離率と固定指値の矛盾チェック
   const postMarketPrice = ev.ptsPrice ?? ev.adrJpyPrice ?? null;
   if (postMarketPrice && ev.closePrice) {
     const gapRate = (postMarketPrice - ev.closePrice) / ev.closePrice;
@@ -131,7 +144,18 @@ function jsonToMarkdown(data: any) {
 
   md += `\n## 3. アナリスト詳細レポート\n`;
   md += `- 【鳥の目：マクロ・外部環境】\n  ${data.report.macro}\n`;
-  md += `- 【虫の目：セクター・企業動向と需給】\n  ${data.report.micro}\n`;
+  
+  // ウォッチリストの全件レビューを展開
+  md += `- 【手持ち駒（ウォッチリスト）の現状評価と翌営業日スタンス】\n`;
+  if (data.report.watchlistReview && data.report.watchlistReview.length > 0) {
+    data.report.watchlistReview.forEach((item: any) => {
+      md += `  - 【${item.name}(${item.ticker})】: ${item.comment}\n`;
+    });
+  } else {
+    md += `  - （現在ウォッチリストに銘柄がありません）\n`;
+  }
+  
+  md += `- 【虫の目：セクター・企業動向と需給（新規材料等）】\n  ${data.report.micro}\n`;
 
   md += `\n## 4. エビデンス・チェック（AI収集情報・機械チェック）\n`;
   data.evidence.forEach((e: any) => {
@@ -152,7 +176,6 @@ export async function POST(request: Request) {
     const genAI = new GoogleGenerativeAI(apiKey);
     const isDeepMode = mode === 'deep';
     
-    // ▼ ここを gemini-3.1-pro-preview に変更しました ▼
     const model = genAI.getGenerativeModel({ 
       model: "gemini-3.1-pro-preview",
       tools: isDeepMode ? [{ googleSearch: {} }] as any : undefined,
@@ -165,9 +188,17 @@ export async function POST(request: Request) {
     const stockInfo = stocks.map((s: any) => `${s.name}(${s.ticker}): 参考価格 ${s.price}円`).join(', ');
     const excludeInfo = excludeList && excludeList.length > 0 ? excludeList.join(', ') : 'なし';
 
+    // プロンプトを改修（休日対応とウォッチリストレビューの強制）
     const basePrompt = `
       あなたは短期トレード用の発注レポートを作成するAIです。
       価格・PTS・ADR/ADS・決算数値について、出典URLや時刻が確認できない数字を捏造してはならない。
+
+      【重要：休日の戦略的思考（Weekend Mode）】
+      本日が土日や市場休場日であっても、「今日は動意がないから見送り」といったコメントは絶対に禁止する。ユーザーは「翌営業日（月曜など）の寄り付きに向けた作戦」を求めている。週末の海外市場の動向、ニュース、月曜のイベント予定などを加味し、翌営業日に向けた具体的な戦術を提示せよ。
+
+      【重要：ウォッチリストの全件レビュー】
+      インプットデータとして渡された「市場データ（参考価格）」の銘柄は、ユーザーが現在保有している、または強く関心を持っている「手持ちの駒（ウォッチリスト）」である。
+      レポート内の "watchlistReview" において、渡された【すべての個別銘柄】について、前日までの値動きや材料を踏まえ、「ホールド（様子見）」「利益確定推奨」「買い増し検討」などの現状評価と翌営業日のスタンスを必ず1銘柄ずつ漏れなく記述せよ。（※KPIである日経平均等は除く）
 
       【禁止事項】
       - PTS価格やADR価格を推測して作ること。
@@ -182,7 +213,7 @@ export async function POST(request: Request) {
       4. 条件を満たす銘柄がない、または相場環境が著しく悪い場合は、無理に買い候補を作らず、買い適性を「見送り（avoid）」とし現金待機を推奨してよい。
       5. 除外リストに含まれる銘柄は絶対に発注案に含めないこと。
 
-      市場データ（参考価格）: ${stockInfo}
+      市場データ（ウォッチリスト・参考価格）: ${stockInfo}
       ユーザーからのSource Input: ${referenceText || "なし"}
       除外リスト（発注禁止）: ${excludeInfo}
     `;
@@ -215,7 +246,6 @@ export async function POST(request: Request) {
       console.log(`Validation attempt ${attempt + 1} failed:`, finalWarnings);
     }
 
-    // 修復後にもエラーが残っていた場合の強制フォールバック処理
     if (finalWarnings.length > 0) {
       parsedData.orders = parsedData.orders.map((o: any) => ({
         ...o,
