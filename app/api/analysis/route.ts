@@ -264,7 +264,6 @@ export async function POST(request: Request) {
 
     const model = genAI.getGenerativeModel({ 
       model: "gemini-3.1-pro-preview",
-      // ↓ ここに as any を追加して型チェックエラーを回避
       tools: [{ googleSearch: {} }] as any,
       generationConfig: {
         responseMimeType: "application/json",
@@ -272,7 +271,8 @@ export async function POST(request: Request) {
       }
     });
 
-    const stockMap = new Map(
+    // ここで明示的に Map<string, any> と型を指定します
+    const stockMap = new Map<string, any>(
       stocks.map((s: any) => {
         const p = Number(s.price);
         return [
