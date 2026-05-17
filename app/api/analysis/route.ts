@@ -152,8 +152,9 @@ export async function POST(request: Request) {
     const genAI = new GoogleGenerativeAI(apiKey);
     const isDeepMode = mode === 'deep';
     
+    // ▼ ここを gemini-3.1-pro-preview に変更しました ▼
     const model = genAI.getGenerativeModel({ 
-      model: "gemini-3-flash-preview",
+      model: "gemini-3.1-pro-preview",
       tools: isDeepMode ? [{ googleSearch: {} }] as any : undefined,
       generationConfig: {
         responseMimeType: "application/json",
