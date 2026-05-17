@@ -57,7 +57,6 @@ const responseSchema: Schema = {
       type: SchemaType.OBJECT,
       properties: {
         macro: { type: SchemaType.STRING },
-        // ウォッチリスト全件レビュー用に追加
         watchlistReview: { 
           type: SchemaType.ARRAY, 
           items: {
@@ -88,7 +87,6 @@ function validateOrder(order: any, evidenceList: any[], excludeList: string[] = 
     return [`${order.ticker}: 証拠データが存在しない銘柄の発注案です。`];
   }
 
-  // 除外リストのチェック
   const excluded = excludeList.some((x) =>
     [order.ticker, order.name].filter(Boolean).some((v) =>
       String(v).toLowerCase().includes(String(x).toLowerCase())
@@ -98,7 +96,6 @@ function validateOrder(order: any, evidenceList: any[], excludeList: string[] = 
     warnings.push(`${order.ticker}: 除外リストに含まれている銘柄です。発注案に入れてはいけません。`);
   }
 
-  // 出典URLの必須チェック
   if (ev.ptsPrice && !ev.ptsSourceUrl) {
     warnings.push(`${order.ticker}: PTS価格があるのに出典URLがありません。`);
   }
@@ -106,7 +103,6 @@ function validateOrder(order: any, evidenceList: any[], excludeList: string[] = 
     warnings.push(`${order.ticker}: ADR価格の換算条件または出典URLが不足しています。`);
   }
 
-  // 乖離率と固定指値の矛盾チェック
   const postMarketPrice = ev.ptsPrice ?? ev.adrJpyPrice ?? null;
   if (postMarketPrice && ev.closePrice) {
     const gapRate = (postMarketPrice - ev.closePrice) / ev.closePrice;
@@ -117,7 +113,6 @@ function validateOrder(order: any, evidenceList: any[], excludeList: string[] = 
     }
   }
 
-  // 資金管理の絶対ルール
   if (order.lotAmountYen && order.lotAmountYen > 6000000) {
     warnings.push(`${order.ticker}: 1銘柄の投入額が600万円超です。資金1600万円に対する集中投資として過大です。`);
   }
@@ -145,7 +140,6 @@ function jsonToMarkdown(data: any) {
   md += `\n## 3. アナリスト詳細レポート\n`;
   md += `- 【鳥の目：マクロ・外部環境】\n  ${data.report.macro}\n`;
   
-  // ウォッチリストの全件レビューを展開
   md += `- 【手持ち駒（ウォッチリスト）の現状評価と翌営業日スタンス】\n`;
   if (data.report.watchlistReview && data.report.watchlistReview.length > 0) {
     data.report.watchlistReview.forEach((item: any) => {
@@ -185,16 +179,22 @@ export async function POST(request: Request) {
       }
     });
 
-    const stockInfo = stocks.map((s: any) => `${s.name}(${s.ticker}): 参考価格 ${s.price}円`).join(', ');
+    // 騰落率（changePercent）を復活させ、AIに事実の変動を正確に伝える
+    const stockInfo = stocks.map((s: any) => {
+      const changeStr = s.changePercent !== null && s.changePercent !== undefined 
+        ? ` (前日比: ${s.changePercent > 0 ? '+' : ''}${s.changePercent.toFixed(2)}%)` 
+        : '';
+      return `${s.name}(${s.ticker}): 参考価格 ${s.price}円${changeStr}`;
+    }).join(', ');
+    
     const excludeInfo = excludeList && excludeList.length > 0 ? excludeList.join(', ') : 'なし';
 
-    // プロンプトを改修（休日対応とウォッチリストレビューの強制）
     const basePrompt = `
       あなたは短期トレード用の発注レポートを作成するAIです。
       価格・PTS・ADR/ADS・決算数値について、出典URLや時刻が確認できない数字を捏造してはならない。
 
       【重要：休日の戦略的思考（Weekend Mode）】
-      本日が土日や市場休場日であっても、「今日は動意がないから見送り」といったコメントは絶対に禁止する。ユーザーは「翌営業日（月曜など）の寄り付きに向けた作戦」を求めている。週末の海外市場の動向、ニュース、月曜のイベント予定などを加味し、翌営業日に向けた具体的な戦術を提示せよ。
+      本日が土日や市場休場日であっても、「今日は動意がないから見送り」といったコメントは絶対に禁止する。週末の海外市場の動向、ニュース、月曜のイベント予定などを加味し、翌営業日に向けた具体的な戦術を提示せよ。
 
       【重要：ウォッチリストの全件レビュー】
       インプットデータとして渡された「市場データ（参考価格）」の銘柄は、ユーザーが現在保有している、または強く関心を持っている「手持ちの駒（ウォッチリスト）」である。
@@ -205,6 +205,7 @@ export async function POST(request: Request) {
       - 引け後材料（PTS等）で大きく動いているのに、参考価格近辺をエントリー価格として流用すること。
       - ターゲットがエントリー価格を下回る発注案を出すこと。
       - R/Rを計算せずに雰囲気で書くこと。
+      - インプットデータの騰落率（プラス・マイナス）と完全に矛盾するマクロ市況を書くこと。（例：データ上でSOXがマイナスなのに「大幅高」と記述する等）
 
       【発注ルール】
       1. 決算発表後の銘柄は、PTSまたはADR/ADSの確認結果を evidence に記載せよ。URLや時刻が不明な場合は「確認できず」とする。
@@ -213,7 +214,7 @@ export async function POST(request: Request) {
       4. 条件を満たす銘柄がない、または相場環境が著しく悪い場合は、無理に買い候補を作らず、買い適性を「見送り（avoid）」とし現金待機を推奨してよい。
       5. 除外リストに含まれる銘柄は絶対に発注案に含めないこと。
 
-      市場データ（ウォッチリスト・参考価格）: ${stockInfo}
+      市場データ（ウォッチリスト・参考価格と騰落率）: ${stockInfo}
       ユーザーからのSource Input: ${referenceText || "なし"}
       除外リスト（発注禁止）: ${excludeInfo}
     `;
