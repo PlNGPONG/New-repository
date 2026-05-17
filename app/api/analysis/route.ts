@@ -1,7 +1,7 @@
 // app/api/analysis/route.ts
 import { NextResponse } from 'next/server';
 import { GoogleGenerativeAI, SchemaType } from "@google/generative-ai";
-import type { Schema } from "@google/generative-ai"; // 型インポートの分離
+import type { Schema } from "@google/generative-ai";
 
 // ユーティリティ関数
 function normalizeTicker(ticker: string) {
@@ -119,7 +119,6 @@ function validateOrder(order: any, evidenceList: any[], stockMap: Map<string, an
   const ev = evidenceList.find((e: any) => normalizeTicker(e.ticker) === ticker);
   const stock = stockMap.get(ticker);
   
-  // 新規候補銘柄の許可ロジック
   const isNewCandidate = newTickers.some((t) => normalizeTicker(t) === ticker);
 
   if (!stock && !isNewCandidate) {
@@ -130,7 +129,6 @@ function validateOrder(order: any, evidenceList: any[], stockMap: Map<string, an
     warnings.push(`${order.ticker}: 証拠データ(evidence)が存在しない銘柄の発注案です。`);
   }
 
-  // Enum値の厳密チェック
   const allowedEntryTypes = ["fixed", "conditional", "avoid"];
   if (!allowedEntryTypes.includes(order.entryType)) {
     warnings.push(`${order.ticker}: entryTypeが不正です。fixed / conditional / avoid のいずれかにしてください。`);
@@ -140,7 +138,6 @@ function validateOrder(order: any, evidenceList: any[], stockMap: Map<string, an
     warnings.push(`${order.ticker}: buyRatingが不正です。高 / 中 / 低 / 見送り のいずれかにしてください。`);
   }
 
-  // 除外リストチェック
   const excluded = excludeList.some((x) =>
     [order.ticker, order.name].filter(Boolean).some((v) =>
       String(v).toLowerCase().includes(String(x).toLowerCase())
@@ -150,7 +147,6 @@ function validateOrder(order: any, evidenceList: any[], stockMap: Map<string, an
     warnings.push(`${order.ticker}: 除外リストに含まれている銘柄です。発注案に入れてはいけません。`);
   }
 
-  // 出典URLのチェック
   if (ev?.ptsPrice && !ev.ptsSourceUrl) {
     warnings.push(`${order.ticker}: PTS価格があるのに出典URLがありません。`);
   }
@@ -158,7 +154,6 @@ function validateOrder(order: any, evidenceList: any[], stockMap: Map<string, an
     warnings.push(`${order.ticker}: ADR価格の換算条件または出典URLが不足しています。`);
   }
 
-  // 基準価格の決定（新規候補銘柄の場合はev.closePriceを使用）
   const basePrice = (stock?.referencePrice != null && Number.isFinite(stock.referencePrice))
     ? stock.referencePrice
     : (ev?.closePrice != null && Number.isFinite(ev.closePrice))
@@ -179,7 +174,6 @@ function validateOrder(order: any, evidenceList: any[], stockMap: Map<string, an
     }
   }
 
-  // R/Rの再計算チェック (null明示判定に変更)
   if (order.entryType === "fixed" && order.entryLow != null && order.entryHigh != null && order.targetLow != null && order.stopLossPrice != null) {
     const entry = (order.entryLow + order.entryHigh) / 2;
     const risk = entry - order.stopLossPrice;
@@ -199,7 +193,6 @@ function validateOrder(order: any, evidenceList: any[], stockMap: Map<string, an
     }
   }
 
-  // 資金管理チェック
   if (order.lotAmountYen && order.lotAmountYen > 6000000) {
     warnings.push(`${order.ticker}: 1銘柄の投入額が600万円超です。資金1600万円に対する集中投資として過大です。`);
   }
@@ -213,7 +206,7 @@ function validateOrder(order: any, evidenceList: any[], stockMap: Map<string, an
   return warnings;
 }
 
-// 3. JSONをMarkdownに変換（残存したレポート警告も画面下部に表示）
+// 3. JSONをMarkdownに変換
 function jsonToMarkdown(data: any, reportWarnings: string[] = []) {
   let md = `## 1. サマリー\n${data.summary}\n\n`;
   
@@ -262,7 +255,6 @@ export async function POST(request: Request) {
     const genAI = new GoogleGenerativeAI(apiKey);
     const isDeepMode = mode === 'deep';
     
-    // Lightモードの場合はバリデーションを通過できないため処理をブロック
     if (!isDeepMode) {
       return NextResponse.json({
         success: false,
@@ -272,7 +264,8 @@ export async function POST(request: Request) {
 
     const model = genAI.getGenerativeModel({ 
       model: "gemini-3.1-pro-preview",
-      tools: [{ googleSearch: {} }],
+      // ↓ ここに as any を追加して型チェックエラーを回避
+      tools: [{ googleSearch: {} }] as any,
       generationConfig: {
         responseMimeType: "application/json",
         responseSchema: responseSchema,
